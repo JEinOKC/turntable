@@ -51,3 +51,10 @@ button.accent { background: var(--accent); border-color: var(--accent); color: #
 
 body.kiosk { cursor: none; }
 body.kiosk #controls { max-width: none; padding: 14px 18px; }
+
+#screen h2 { font-size: 15px; font-weight: 600; color: var(--muted); margin: 4px 0 8px; }
+.choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.choices button { padding: 10px 6px; font-size: 15px; }
+.choices button.current { border-color: var(--accent); color: var(--accent); }
+body.kiosk .kiosk-hide { display: none; }
+#dark { position: fixed; inset: 0; background: #000; }

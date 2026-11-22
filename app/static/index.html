@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#111">
 <title>Turntable</title>
-<link rel="stylesheet" href="/static/style.css?v=1">
+<link rel="stylesheet" href="/static/style.css?v=2">
 </head>
 <body>
 <main id="controls">
@@ -14,6 +14,17 @@
     <span id="signal" class="pill">…</span>
   </header>
   <ul id="rooms"><li class="empty">Looking for Sonos rooms…</li></ul>
+  <section id="screen" class="kiosk-hide">
+    <h2>Pi screen</h2>
+    <div class="choices">
+      <button data-mode="controls">Controls</button>
+      <button data-mode="viz" data-style="0">Record</button>
+      <button data-mode="viz" data-style="1">Bars</button>
+      <button data-mode="viz" data-style="2">Waveform</button>
+      <button data-mode="viz" data-style="3">Fireplace</button>
+      <button data-mode="off">Off</button>
+    </div>
+  </section>
   <footer>
     <button id="stop" class="wide">Stop all</button>
     <button id="visualize" class="wide accent">Visualize</button>
@@ -26,6 +37,7 @@
     <button id="viz-close">Done</button>
   </div>
 </section>
-<script src="/static/app.js?v=7"></script>
+<div id="dark" hidden></div>
+<script src="/static/app.js?v=8"></script>
 </body>
 </html>

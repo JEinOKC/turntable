@@ -23,6 +23,7 @@ VISUAL_DELAY = float(os.environ.get("VISUAL_DELAY", "2.5"))
 PORT = int(os.environ.get("PORT", "80"))
 MOUNT = "turntable.mp3"
 STATIC = Path(__file__).parent / "static"
+BACKLIGHT = Path("/sys/class/backlight/10-0045/brightness")
 
 VIS_RATE = 11025
 FPS = 30
@@ -206,6 +207,23 @@ async def blocking(fn, *args):
     return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
 
 
+# ---------- Pi screen ----------
+
+# What the Pi's own screen shows: the controls, a visualizer style, or nothing.
+screen = {"mode": "controls", "style": 0}
+
+
+def set_screen(mode=None, style=None):
+    if mode in ("controls", "viz", "off"):
+        screen["mode"] = mode
+    if isinstance(style, int) and style >= 0:
+        screen["style"] = style
+    try:
+        BACKLIGHT.write_text("0" if screen["mode"] == "off" else "255")
+    except OSError as e:
+        print(f"backlight: {e}", flush=True)
+
+
 # ---------- HTTP ----------
 
 routes = web.RouteTableDef()
@@ -246,6 +264,18 @@ async def room(request):
 async def stop(request):
     await blocking(stop_all)
     return web.json_response(await blocking(list_rooms))
+
+
+@routes.get("/api/screen")
+async def get_screen(request):
+    return web.json_response(screen)
+
+
+@routes.post("/api/screen")
+async def post_screen(request):
+    body = await request.json()
+    set_screen(body.get("mode"), body.get("style"))
+    return web.json_response(screen)
 
 
 @routes.get("/ws")

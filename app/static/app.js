@@ -266,13 +266,65 @@ function fireplace(w, h) {
   }
 }
 
-$("visualize").onclick = openViz;
-$("viz-close").onclick = closeViz;
-$("viz-next").onclick = () => {
-  style = (style + 1) % styles.length;
+function setStyle(n) {
+  style = n % styles.length;
   localStorage.vizStyle = style;
   ctx.clearRect(0, 0, innerWidth, innerHeight);
-  showUi();
-};
+}
+
+$("visualize").onclick = () => { openViz(); tellScreen("viz"); };
+$("viz-close").onclick = () => { closeViz(); tellScreen("controls"); };
+$("viz-next").onclick = () => { setStyle(style + 1); showUi(); tellScreen("viz"); };
+
+// ---------- Pi screen (set from any phone; the kiosk follows) ----------
+
+let screenState = null;
+
+function tellScreen(mode, s = style) {
+  if (kiosk) api("/api/screen", { mode, style: s }).then((st) => (screenState = st)).catch(() => {});
+}
+
+function applyScreen(st) {
+  const vizOpen = !$("viz").hidden;
+  if (st.mode === "viz") {
+    if (st.style !== style) setStyle(st.style);
+    if (!vizOpen) openViz();
+  } else if (vizOpen) {
+    closeViz();
+  }
+  $("dark").hidden = st.mode !== "off";
+}
+
+async function followScreen() {
+  try {
+    const st = await api("/api/screen");
+    if (!screenState || st.mode !== screenState.mode || st.style !== screenState.style) applyScreen(st);
+    screenState = st;
+  } catch {}
+}
+
+function markScreen(st) {
+  for (const b of document.querySelectorAll("#screen button")) {
+    const match = b.dataset.mode === st.mode && (st.mode !== "viz" || +b.dataset.style === st.style);
+    b.classList.toggle("current", match);
+  }
+}
+
+if (kiosk) {
+  $("dark").onclick = () => { $("dark").hidden = true; tellScreen("controls"); };
+  followScreen();
+  setInterval(followScreen, 1000);
+} else {
+  for (const b of document.querySelectorAll("#screen button")) {
+    b.onclick = async () => {
+      const body = { mode: b.dataset.mode };
+      if (b.dataset.style) body.style = +b.dataset.style;
+      try { markScreen(await api("/api/screen", body)); } catch {}
+    };
+  }
+  const poll = () => api("/api/screen").then(markScreen).catch(() => {});
+  poll();
+  setInterval(poll, 5000);
+}
 canvas.onclick = showUi;
 addEventListener("resize", () => { if (!$("viz").hidden) resize(); });
