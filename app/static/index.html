@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#111">
+<title>Turntable</title>
+<link rel="stylesheet" href="/static/style.css?v=1">
+</head>
+<body>
+<main id="controls">
+  <header>
+    <h1>Turntable</h1>
+    <span id="signal" class="pill">…</span>
+  </header>
+  <ul id="rooms"><li class="empty">Looking for Sonos rooms…</li></ul>
+  <footer>
+    <button id="stop" class="wide">Stop all</button>
+    <button id="visualize" class="wide accent">Visualize</button>
+  </footer>
+</main>
+<section id="viz" hidden>
+  <canvas id="canvas"></canvas>
+  <div id="viz-ui">
+    <button id="viz-next">Next style</button>
+    <button id="viz-close">Done</button>
+  </div>
+</section>
+<script src="/static/app.js?v=1"></script>
+</body>
+</html>
