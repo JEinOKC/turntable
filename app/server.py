@@ -99,6 +99,9 @@ class Audio:
         self.flac_proc = None
         self.flac_header = None
         self.flac_listeners = set()
+        self.xruns = 0
+        self.captured = 0  # stereo samples read since capture started
+        self.capture_started = None
         self.window = np.hanning(FFT_SIZE)
         self.ring = np.zeros(FFT_SIZE, dtype=np.float32)
         freqs = np.fft.rfftfreq(FFT_SIZE, 1 / VIS_RATE)
@@ -112,7 +115,7 @@ class Audio:
     def command(self):
         icecast = f"icecast://source:{ICECAST_PASSWORD}@localhost:8000/{MOUNT}"
         return [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "ffmpeg", "-hide_banner", "-loglevel", "warning",
             "-f", "alsa", "-ac", "2", "-ar", str(RATE), "-i", ALSA_DEVICE,
             "-filter_complex", f"[0:a]volume={GAIN_DB}dB,asplit=2[mp3][pcm]",
             "-map", "[mp3]", "-c:a", "libmp3lame", "-b:a", "320k",
@@ -125,21 +128,41 @@ class Audio:
             proc = self.proc = await asyncio.create_subprocess_exec(
                 *self.command(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             self.running = True
+            self.captured, self.capture_started = 0, time.monotonic()
+            log_task = asyncio.create_task(self.read_log(proc))
             try:
                 while True:
                     chunk = await proc.stdout.readexactly(FRAME * 4)
+                    self.captured += FRAME
                     self.feed_flac(chunk)
                     stereo = np.frombuffer(chunk, dtype=np.int16).astype(np.float32).reshape(-1, 2) / 32768
                     self.analyse(stereo.mean(axis=1))
             except asyncio.IncompleteReadError:
                 pass
             self.running = False
-            err = (await proc.stderr.read()).decode(errors="replace").strip()
             await proc.wait()
-            print(f"ffmpeg exited ({proc.returncode}): {err[-300:]}", flush=True)
+            await log_task
+            print(f"ffmpeg exited ({proc.returncode})", flush=True)
             self.level_db = -120.0
             self.avg_power = 0.0
             await asyncio.sleep(3)
+
+    async def read_log(self, proc):
+        """Keep ffmpeg's stderr drained; count capture overruns (dropped audio)."""
+        while line := await proc.stderr.readline():
+            text = line.decode(errors="replace").strip()
+            if "dts to muxer" in text:
+                continue
+            if "xrun" in text.lower():
+                self.xruns += 1
+            print(f"ffmpeg: {text}", flush=True)
+
+    def capture_health(self):
+        if not self.capture_started:
+            return {}
+        elapsed = time.monotonic() - self.capture_started
+        return {"xruns": self.xruns, "capture_seconds": round(elapsed, 1),
+                "missing_seconds": round(elapsed - self.captured / RATE, 2)}
 
     # The lossless stream is a separate encoder fed from the same capture, so it can
     # start and stop without interrupting the MP3 stream.
@@ -371,6 +394,7 @@ async def follow_music():
             if settings["auto_play"]:
                 for name in settings["auto_rooms"]:
                     try:
+                        await stream_ready()
                         await blocking(turn_on_if_off, name)
                     except Exception as e:
                         print(f"auto-play {name}: {e}", flush=True)
@@ -386,6 +410,12 @@ async def follow_music():
                 and now - quiet_since >= idle and now - screen_changed >= idle):
             slept_from = screen["mode"]
             set_screen("off")
+
+
+async def stream_ready():
+    """Make sure the lossless stream has started before pointing Sonos at it."""
+    if settings["flac"] and not await audio.start_flac(timeout=30):
+        raise web.HTTPServiceUnavailable(text="The lossless stream isn't ready yet.")
 
 
 def turn_on_if_off(name):
@@ -410,6 +440,7 @@ async def status(request):
         "capturing": audio.running,
         "signal": audio.avg_db > SIGNAL_DB,
         "level_db": round(audio.avg_db, 1),
+        **audio.capture_health(),
         "stream": stream_url(),
     })
 
@@ -426,6 +457,8 @@ async def room(request):
     if "volume" in body:
         await blocking(set_volume, name, body["volume"])
     if "on" in body:
+        if body["on"]:
+            await stream_ready()
         await blocking(turn_on if body["on"] else turn_off, name)
     return web.json_response(await blocking(list_rooms))
 
@@ -538,7 +571,8 @@ def main():
     app.add_routes(routes)
     app.router.add_static("/static", STATIC)
     app.on_startup.append(start_background)
-    web.run_app(app, port=PORT, print=None)
+    # Short shutdown: open Sonos streams would otherwise hold a restart for a minute.
+    web.run_app(app, port=PORT, print=None, shutdown_timeout=3)
 
 
 if __name__ == "__main__":
