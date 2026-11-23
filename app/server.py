@@ -8,13 +8,18 @@ import asyncio
 import collections
 import json
 import os
+import io
 import socket
 import time
+import wave
 from pathlib import Path
+from urllib.parse import quote
 
 import numpy as np
+import aiohttp
 import soco
 from aiohttp import web
+from shazamio import Shazam
 
 ICECAST_PASSWORD = os.environ["ICECAST_SOURCE_PASSWORD"]
 ALSA_DEVICE = os.environ.get("ALSA_DEVICE", "hw:CODEC")
@@ -38,6 +43,10 @@ WAVE_POINTS = 96
 # Above this the turntable counts as playing. Needs checking against a real record.
 SIGNAL_DB = -45
 SOUND_SECONDS = 2  # sound must last this long before rooms auto-start
+GAP_SECONDS = 1.0  # a quiet stretch this long between loud parts counts as a new track
+IDENTIFY_AFTER = 10  # seconds into a track before asking Shazam
+CLIP_SECONDS = 12
+RECHECK_SECONDS = 180  # re-identify if no gap was heard (gapless albums)
 
 
 def lan_ip():
@@ -99,6 +108,11 @@ class Audio:
         self.flac_proc = None
         self.flac_header = None
         self.flac_listeners = set()
+        self.last_sound = 0.0
+        self.recent = collections.deque(maxlen=CLIP_SECONDS * FPS)
+        self.gaps = 0  # quiet gaps seen between tracks
+        self.quiet_run = 0
+        self.loud_run = 0
         self.xruns = 0
         self.captured = 0  # stereo samples read since capture started
         self.capture_started = None
@@ -134,6 +148,7 @@ class Audio:
                 while True:
                     chunk = await proc.stdout.readexactly(FRAME * 4)
                     self.captured += FRAME
+                    self.recent.append(chunk)
                     self.feed_flac(chunk)
                     stereo = np.frombuffer(chunk, dtype=np.int16).astype(np.float32).reshape(-1, 2) / 32768
                     self.analyse(stereo.mean(axis=1))
@@ -156,6 +171,18 @@ class Audio:
             if "xrun" in text.lower():
                 self.xruns += 1
             print(f"ffmpeg: {text}", flush=True)
+
+    def clip_wav(self):
+        """The last few seconds of audio as a mono 16 kHz WAV, for recognition."""
+        pcm = np.frombuffer(b"".join(self.recent), dtype=np.int16).reshape(-1, 2).mean(axis=1)
+        pcm = pcm[: len(pcm) // 11 * 11].reshape(-1, 11).mean(axis=1)  # 44.1k -> ~16k
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(RATE // 11)
+            w.writeframes(pcm.astype(np.int16).tobytes())
+        return buf.getvalue()
 
     def capture_health(self):
         if not self.capture_started:
@@ -225,6 +252,16 @@ class Audio:
         power = float(np.mean(samples ** 2))
         self.level_db = float(10 * np.log10(power or 1e-12))
         self.avg_power += (power - self.avg_power) * 0.03  # ~1 second average
+        # Track gaps: a pop or crackle is too short to count as sound (needs ~100 ms).
+        if self.level_db > SIGNAL_DB:
+            self.loud_run += 1
+            if self.loud_run >= 3:
+                if self.quiet_run >= GAP_SECONDS * FPS:
+                    self.gaps += 1
+                self.quiet_run = 0
+        else:
+            self.loud_run = 0
+            self.quiet_run += 1
         if self.clients:
             # Average groups of 4 samples: 44.1 kHz down to the visualizer's 11 kHz.
             self.analyse_vis(samples[: len(samples) // 4 * 4].reshape(-1, 4).mean(axis=1))
@@ -368,6 +405,70 @@ def set_screen(mode=None, style=None):
         print(f"backlight: {e}", flush=True)
 
 
+# ---------- what's playing (Shazam) ----------
+
+track = None  # {"title", "artist", "album", "art"} of the song on the turntable
+shazam = None
+
+
+async def identify():
+    global track, shazam
+    shazam = shazam or Shazam()
+    try:
+        result = await shazam.recognize(audio.clip_wav())
+    except Exception as e:
+        print(f"shazam: {e}", flush=True)
+        return False
+    found = result.get("track")
+    if not found:
+        return False
+    album = next((m.get("text") for sec in found.get("sections", []) for m in sec.get("metadata", [])
+                  if m.get("title") == "Album"), None)
+    new = {"title": found.get("title"), "artist": found.get("subtitle"), "album": album,
+           "art": found.get("images", {}).get("coverart")}
+    if new != track:
+        track = new
+        print(f"now playing: {new['artist']} - {new['title']}", flush=True)
+        await tell_icecast(f"{new['artist']} - {new['title']}")
+    return True
+
+
+async def tell_icecast(song):
+    """Show the song in Sonos's now playing (MP3 stream only)."""
+    url = f"http://localhost:8000/admin/metadata?mount=/{MOUNT}&mode=updinfo&song={quote(song)}"
+    try:
+        async with aiohttp.ClientSession() as session:
+            await session.get(url, auth=aiohttp.BasicAuth("source", ICECAST_PASSWORD))
+    except Exception as e:
+        print(f"icecast metadata: {e}", flush=True)
+
+
+async def follow_tracks():
+    """Identify the song a few seconds into each track; vinyl's gaps between tracks mark the changes."""
+    global track
+    gaps = audio.gaps
+    due = None  # when to next ask Shazam
+    tries = 0
+    last_id = 0
+    while True:
+        await asyncio.sleep(1)
+        now = time.monotonic()
+        playing = audio.avg_db > SIGNAL_DB
+        if not playing:
+            if now - audio.last_sound > settings["idle_minutes"] * 60 and track:
+                track = None
+            continue
+        if audio.gaps != gaps or due is None and now - last_id > RECHECK_SECONDS:
+            gaps = audio.gaps
+            due, tries = now + IDENTIFY_AFTER, 0
+        if due and now >= due:
+            last_id = now
+            tries += 1
+            matched = await identify()
+            # One retry later in the track if Shazam didn't know it.
+            due = None if matched or tries >= 2 else now + 20
+
+
 # ---------- follow the music ----------
 
 async def follow_music():
@@ -381,7 +482,7 @@ async def follow_music():
         now = time.monotonic()
         idle = settings["idle_minutes"] * 60
         if audio.avg_db > SIGNAL_DB:
-            quiet_since = now
+            quiet_since = audio.last_sound = now
             sound_since = sound_since or now
         else:
             sound_since = None
@@ -441,6 +542,7 @@ async def status(request):
         "signal": audio.avg_db > SIGNAL_DB,
         "level_db": round(audio.avg_db, 1),
         **audio.capture_health(),
+        "track": track,
         "stream": stream_url(),
     })
 
@@ -561,7 +663,7 @@ async def ws(request):
 
 
 async def start_background(app):
-    app["tasks"] = [asyncio.create_task(t) for t in (audio.run(), audio.broadcast(), follow_music())]
+    app["tasks"] = [asyncio.create_task(t) for t in (audio.run(), audio.broadcast(), follow_music(), follow_tracks())]
     if settings["flac"]:
         app["tasks"].append(asyncio.create_task(audio.start_flac(timeout=60)))
 

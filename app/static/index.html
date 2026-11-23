@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Turntable">
-<link rel="stylesheet" href="/static/style.css?v=4">
+<link rel="stylesheet" href="/static/style.css?v=5">
 </head>
 <body>
 <main id="controls">
@@ -18,6 +18,10 @@
     <h1>Turntable</h1>
     <span id="signal" class="pill">…</span>
   </header>
+  <section id="now" hidden>
+    <img id="art" alt="">
+    <div><div id="np-title"></div><div id="np-artist"></div></div>
+  </section>
   <ul id="rooms"><li class="empty">Looking for Sonos rooms…</li></ul>
   <section id="screen" class="kiosk-hide">
     <h2>Pi screen</h2>
@@ -49,6 +53,6 @@
   </div>
 </section>
 <div id="dark" hidden></div>
-<script src="/static/app.js?v=10"></script>
+<script src="/static/app.js?v=11"></script>
 </body>
 </html>

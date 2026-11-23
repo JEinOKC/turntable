@@ -61,3 +61,8 @@ body.kiosk .kiosk-hide { display: none !important; }
 #settings { display: flex; flex-direction: column; gap: 8px; }
 .setting { display: flex; align-items: center; justify-content: space-between; background: var(--card);
   border-radius: 12px; padding: 10px 14px; }
+#now { display: flex; align-items: center; gap: 12px; background: var(--card); border-radius: 14px; padding: 10px; }
+#art { width: 56px; height: 56px; border-radius: 8px; object-fit: cover; background: var(--line); }
+#art[src=""] { visibility: hidden; }
+#np-title { font-weight: 600; }
+#np-artist { color: var(--muted); font-size: 15px; }

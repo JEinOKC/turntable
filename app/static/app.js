@@ -59,6 +59,12 @@ async function refreshStatus() {
     const pill = $("signal");
     pill.textContent = !s.capturing ? "Turntable unplugged" : s.signal ? "Live" : "Silent";
     pill.classList.toggle("live", s.capturing && s.signal);
+    $("now").hidden = !s.track;
+    if (s.track) {
+      $("np-title").textContent = s.track.title;
+      $("np-artist").textContent = [s.track.artist, s.track.album].filter(Boolean).join(" · ");
+      if ($("art").getAttribute("src") !== (s.track.art || "")) $("art").src = s.track.art || "";
+    }
   } catch {}
 }
 
