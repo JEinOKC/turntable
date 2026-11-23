@@ -56,7 +56,7 @@ body.kiosk #controls { max-width: none; padding: 14px 18px; }
 .choices { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 .choices button { padding: 10px 6px; font-size: 15px; }
 .choices button.current { border-color: var(--accent); color: var(--accent); }
-body.kiosk .kiosk-hide { display: none; }
+body.kiosk .kiosk-hide { display: none !important; }
 #dark { position: fixed; inset: 0; background: #000; }
 #settings { display: flex; flex-direction: column; gap: 8px; }
 .setting { display: flex; align-items: center; justify-content: space-between; background: var(--card);
