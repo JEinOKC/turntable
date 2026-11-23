@@ -28,9 +28,10 @@ STATIC = Path(__file__).parent / "static"
 SETTINGS_FILE = Path.home() / ".config" / "turntable" / "settings.json"
 BACKLIGHT = Path("/sys/class/backlight/10-0045/brightness")
 
-VIS_RATE = 11025
+RATE = 44100
+VIS_RATE = RATE // 4
 FPS = 30
-FRAME = VIS_RATE // FPS
+FRAME = RATE // FPS  # stereo samples per analysis frame
 FFT_SIZE = 1024
 BANDS = 48
 WAVE_POINTS = 96
@@ -95,6 +96,7 @@ class Audio:
         self.avg_power = 0.0
         self.running = False
         self.proc = None
+        self.flac_proc = None
         self.flac_header = None
         self.flac_listeners = set()
         self.window = np.hanning(FFT_SIZE)
@@ -107,51 +109,31 @@ class Audio:
         self.band_bins = [b if len(b) else np.array([np.searchsorted(freqs, lo)])
                           for b, lo in zip(self.band_bins, edges[:-1])]
 
-    def command(self, flac_fd=None):
+    def command(self):
         icecast = f"icecast://source:{ICECAST_PASSWORD}@localhost:8000/{MOUNT}"
-        split = 3 if flac_fd is not None else 2
-        cmd = [
+        return [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
-            "-f", "alsa", "-ac", "2", "-ar", "44100", "-i", ALSA_DEVICE,
-            "-filter_complex",
-            f"[0:a]volume={GAIN_DB}dB,asplit={split}[out][vis]{'[lossless]' if split == 3 else ''};"
-            f"[vis]pan=mono|c0=0.5*c0+0.5*c1,aresample={VIS_RATE}[mono]",
-            "-map", "[out]", "-c:a", "libmp3lame", "-b:a", "320k",
+            "-f", "alsa", "-ac", "2", "-ar", str(RATE), "-i", ALSA_DEVICE,
+            "-filter_complex", f"[0:a]volume={GAIN_DB}dB,asplit=2[mp3][pcm]",
+            "-map", "[mp3]", "-c:a", "libmp3lame", "-b:a", "320k",
             "-content_type", "audio/mpeg", "-ice_name", "Turntable", "-f", "mp3", icecast,
-            "-map", "[mono]", "-f", "s16le", "pipe:1",
+            "-map", "[pcm]", "-f", "s16le", "pipe:1",
         ]
-        if flac_fd is not None:
-            cmd += ["-map", "[lossless]", "-c:a", "flac", "-compression_level", "0",
-                    "-flush_packets", "1", "-f", "flac", f"pipe:{flac_fd}"]
-        return cmd
-
-    def restart(self):
-        if self.proc and self.proc.returncode is None:
-            self.proc.terminate()
 
     async def run(self):
         while True:
-            flac_r = flac_w = None
-            if settings["flac"]:
-                flac_r, flac_w = os.pipe()
             proc = self.proc = await asyncio.create_subprocess_exec(
-                *self.command(flac_w), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-                pass_fds=(flac_w,) if flac_w is not None else ())
-            flac_task = None
-            if flac_w is not None:
-                os.close(flac_w)
-                flac_task = asyncio.create_task(self.read_flac(flac_r))
+                *self.command(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
             self.running = True
             try:
                 while True:
-                    chunk = await proc.stdout.readexactly(FRAME * 2)
-                    self.analyse(np.frombuffer(chunk, dtype=np.int16).astype(np.float32) / 32768)
+                    chunk = await proc.stdout.readexactly(FRAME * 4)
+                    self.feed_flac(chunk)
+                    stereo = np.frombuffer(chunk, dtype=np.int16).astype(np.float32).reshape(-1, 2) / 32768
+                    self.analyse(stereo.mean(axis=1))
             except asyncio.IncompleteReadError:
                 pass
             self.running = False
-            if flac_task:
-                flac_task.cancel()
-            self.flac_header = None
             err = (await proc.stderr.read()).decode(errors="replace").strip()
             await proc.wait()
             print(f"ffmpeg exited ({proc.returncode}): {err[-300:]}", flush=True)
@@ -159,11 +141,39 @@ class Audio:
             self.avg_power = 0.0
             await asyncio.sleep(3)
 
-    async def read_flac(self, fd):
-        """Split ffmpeg's FLAC output into its header (sent to each new listener) and audio frames."""
-        reader = asyncio.StreamReader()
-        transport, _ = await asyncio.get_running_loop().connect_read_pipe(
-            lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(fd, "rb", 0))
+    # The lossless stream is a separate encoder fed from the same capture, so it can
+    # start and stop without interrupting the MP3 stream.
+
+    async def start_flac(self, timeout=10):
+        if not self.flac_proc:
+            self.flac_proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-hide_banner", "-loglevel", "error",
+                "-f", "s16le", "-ar", str(RATE), "-ac", "2", "-i", "pipe:0",
+                "-c:a", "flac", "-compression_level", "0", "-flush_packets", "1", "-f", "flac", "pipe:1",
+                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+            asyncio.create_task(self.read_flac(self.flac_proc))
+        deadline = time.monotonic() + timeout
+        while self.flac_header is None and time.monotonic() < deadline:
+            await asyncio.sleep(0.2)
+        return self.flac_header is not None
+
+    def stop_flac(self):
+        if self.flac_proc:
+            self.flac_proc.stdin.close()
+            self.flac_proc = None
+
+    def feed_flac(self, chunk):
+        proc = self.flac_proc
+        if proc and not proc.stdin.is_closing():
+            if proc.stdin.transport.get_write_buffer_size() > RATE * 4 * 5:
+                print("flac encoder fell behind; stopping it", flush=True)
+                self.stop_flac()
+            else:
+                proc.stdin.write(chunk)
+
+    async def read_flac(self, proc):
+        """Split the encoder's output into its header (sent to each new listener) and audio frames."""
+        reader = proc.stdout
         try:
             header = await reader.readexactly(4)  # "fLaC"
             last = False
@@ -179,20 +189,22 @@ class Audio:
                         q.put_nowait(None)
                     else:
                         q.put_nowait(chunk)
-        except (asyncio.IncompleteReadError, asyncio.CancelledError):
+        except asyncio.IncompleteReadError:
             pass
         finally:
-            transport.close()
+            self.flac_header = None
             for q in list(self.flac_listeners):
                 self.flac_listeners.discard(q)
                 q.put_nowait(None)
+            await proc.wait()
 
     def analyse(self, samples):
         power = float(np.mean(samples ** 2))
         self.level_db = float(10 * np.log10(power or 1e-12))
         self.avg_power += (power - self.avg_power) * 0.03  # ~1 second average
         if self.clients:
-            self.analyse_vis(samples)
+            # Average groups of 4 samples: 44.1 kHz down to the visualizer's 11 kHz.
+            self.analyse_vis(samples[: len(samples) // 4 * 4].reshape(-1, 4).mean(axis=1))
 
     @property
     def avg_db(self):
@@ -294,6 +306,15 @@ def stop_all():
     for z in discover():
         if room_state(z)["on"]:
             z.group.coordinator.stop()
+
+
+def playing_coordinators():
+    return [z for z in discover() if z.group.coordinator.player_name == z.player_name and room_state(z)["on"]]
+
+
+def repoint(zones):
+    for z in zones:
+        z.play_uri(sonos_uri(), title="Turntable", force_radio=not settings["flac"])
 
 
 def set_volume(name, volume):
@@ -435,14 +456,35 @@ async def get_settings(request):
 @routes.post("/api/settings")
 async def post_settings(request):
     body = await request.json()
-    flac_before = settings["flac"]
-    for key in ("auto_play", "screen_sleep", "flac"):
+    for key in ("auto_play", "screen_sleep"):
         if isinstance(body.get(key), bool):
             settings[key] = body[key]
+    if isinstance(body.get("flac"), bool) and body["flac"] != settings["flac"]:
+        error = await set_flac(body["flac"])
+        if error:
+            return web.json_response({**settings, "error": error})
     save_settings()
-    if settings["flac"] != flac_before:
-        audio.restart()
     return web.json_response(settings)
+
+
+async def set_flac(on):
+    """Switch formats; rooms already playing the turntable move over with a short rebuffer."""
+    if on and not await audio.start_flac():
+        audio.stop_flac()
+        return "The lossless stream didn't start."
+    settings["flac"] = on
+    playing = await blocking(playing_coordinators)
+    await blocking(repoint, playing)
+    if on and playing:
+        await asyncio.sleep(8)
+        if not all(await blocking(lambda: [room_state(z)["on"] for z in playing])):
+            settings["flac"] = False
+            await blocking(repoint, playing)
+            audio.stop_flac()
+            return "Sonos wouldn't play the lossless stream, so it's back on MP3."
+    if not on:
+        audio.stop_flac()
+    return None
 
 
 @routes.get(FLAC_PATH)
@@ -487,6 +529,8 @@ async def ws(request):
 
 async def start_background(app):
     app["tasks"] = [asyncio.create_task(t) for t in (audio.run(), audio.broadcast(), follow_music())]
+    if settings["flac"]:
+        app["tasks"].append(asyncio.create_task(audio.start_flac(timeout=60)))
 
 
 def main():

@@ -344,7 +344,11 @@ if (!kiosk) {
     t.onclick = async () => {
       t.classList.add("busy");
       const on = t.getAttribute("aria-pressed") !== "true";
-      try { renderSettings(await api("/api/settings", { [t.dataset.key]: on })); } catch (e) { alert(e.message); }
+      try {
+        const st = await api("/api/settings", { [t.dataset.key]: on });
+        renderSettings(st);
+        if (st.error) alert(st.error);
+      } catch (e) { alert(e.message); }
     };
   }
   api("/api/settings").then(renderSettings).catch(() => {});
