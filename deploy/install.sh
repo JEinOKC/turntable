@@ -1,6 +1,10 @@
 #!/bin/sh
 # Run on the Pi from ~/turntable-deploy. Safe to re-run.
 set -e
+echo "icecast2 icecast2/icecast-setup boolean false" | sudo debconf-set-selections
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq icecast2 ffmpeg python3-venv python3-numpy python3-aiohttp
+[ -d ~/turntable-venv ] || python3 -m venv --system-site-packages ~/turntable-venv
+~/turntable-venv/bin/pip install -q soco
 if [ ! -f /etc/turntable.env ]; then
   PW=$(head -c 18 /dev/urandom | base64 | tr -d '/+=')
   ADMIN=$(head -c 18 /dev/urandom | base64 | tr -d '/+=')
