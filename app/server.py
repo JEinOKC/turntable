@@ -40,13 +40,18 @@ FRAME = RATE // FPS  # stereo samples per analysis frame
 FFT_SIZE = 1024
 BANDS = 48
 WAVE_POINTS = 96
-# Above this the turntable counts as playing. Needs checking against a real record.
-SIGNAL_DB = -45
+# Detection uses the level with the low end removed: a needle left in the run-out groove
+# makes rumble around -45 dB but almost nothing above it, while music is full of treble.
+# Measured: run-out groove -73 dB. Music: not yet measured.
+TREBLE_DB = -55
 SOUND_SECONDS = 2  # sound must last this long before rooms auto-start
 GAP_SECONDS = 1.0  # a quiet stretch this long between loud parts counts as a new track
 IDENTIFY_AFTER = 10  # seconds into a track before asking Shazam
 CLIP_SECONDS = 12
 RECHECK_SECONDS = 180  # re-identify if no gap was heard (gapless albums)
+# Music is loud most of the time; the clicks of a needle left in the run-out groove are not.
+ACTIVE_WINDOW = 3  # seconds
+ACTIVE_FRACTION = 0.5
 
 
 def lan_ip():
@@ -103,12 +108,15 @@ class Audio:
         self.frames = collections.deque()
         self.level_db = -120.0
         self.avg_power = 0.0
+        self.treble_db = -120.0
+        self.avg_treble = 0.0
         self.running = False
         self.proc = None
         self.flac_proc = None
         self.flac_header = None
         self.flac_listeners = set()
         self.last_sound = 0.0
+        self.loud_frames = collections.deque(maxlen=ACTIVE_WINDOW * FPS)
         self.recent = collections.deque(maxlen=CLIP_SECONDS * FPS)
         self.gaps = 0  # quiet gaps seen between tracks
         self.quiet_run = 0
@@ -252,8 +260,13 @@ class Audio:
         power = float(np.mean(samples ** 2))
         self.level_db = float(10 * np.log10(power or 1e-12))
         self.avg_power += (power - self.avg_power) * 0.03  # ~1 second average
+        treble = float(np.mean(np.diff(samples) ** 2))
+        self.treble_db = float(10 * np.log10(treble or 1e-12))
+        self.avg_treble += (treble - self.avg_treble) * 0.03
+        loud = self.treble_db > TREBLE_DB
+        self.loud_frames.append(loud)
         # Track gaps: a pop or crackle is too short to count as sound (needs ~100 ms).
-        if self.level_db > SIGNAL_DB:
+        if loud:
             self.loud_run += 1
             if self.loud_run >= 3:
                 if self.quiet_run >= GAP_SECONDS * FPS:
@@ -265,6 +278,15 @@ class Audio:
         if self.clients:
             # Average groups of 4 samples: 44.1 kHz down to the visualizer's 11 kHz.
             self.analyse_vis(samples[: len(samples) // 4 * 4].reshape(-1, 4).mean(axis=1))
+
+    @property
+    def active_fraction(self):
+        return sum(self.loud_frames) / self.loud_frames.maxlen
+
+    @property
+    def playing(self):
+        """Music, as opposed to silence or a needle clicking in the run-out groove."""
+        return self.active_fraction >= ACTIVE_FRACTION
 
     @property
     def avg_db(self):
@@ -453,7 +475,7 @@ async def follow_tracks():
     while True:
         await asyncio.sleep(1)
         now = time.monotonic()
-        playing = audio.avg_db > SIGNAL_DB
+        playing = audio.playing
         if not playing:
             if now - audio.last_sound > settings["idle_minutes"] * 60 and track:
                 track = None
@@ -481,7 +503,7 @@ async def follow_music():
         await asyncio.sleep(1)
         now = time.monotonic()
         idle = settings["idle_minutes"] * 60
-        if audio.avg_db > SIGNAL_DB:
+        if audio.playing:
             quiet_since = audio.last_sound = now
             sound_since = sound_since or now
         else:
@@ -539,7 +561,9 @@ async def index(request):
 async def status(request):
     return web.json_response({
         "capturing": audio.running,
-        "signal": audio.avg_db > SIGNAL_DB,
+        "signal": audio.playing,
+        "active": round(audio.active_fraction, 2),
+        "treble_db": round(float(10 * np.log10(audio.avg_treble or 1e-12)), 1),
         "level_db": round(audio.avg_db, 1),
         **audio.capture_health(),
         "track": track,
