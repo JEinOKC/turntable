@@ -328,3 +328,24 @@ if (kiosk) {
 }
 canvas.onclick = showUi;
 addEventListener("resize", () => { if (!$("viz").hidden) resize(); });
+
+// ---------- settings ----------
+
+function renderSettings(st) {
+  for (const t of document.querySelectorAll("#settings .toggle")) {
+    t.setAttribute("aria-pressed", st[t.dataset.key]);
+    t.classList.remove("busy");
+  }
+  $("auto-label").textContent = `Auto-play ${st.auto_rooms.join(" & ")} when a record starts`;
+}
+
+if (!kiosk) {
+  for (const t of document.querySelectorAll("#settings .toggle")) {
+    t.onclick = async () => {
+      t.classList.add("busy");
+      const on = t.getAttribute("aria-pressed") !== "true";
+      try { renderSettings(await api("/api/settings", { [t.dataset.key]: on })); } catch (e) { alert(e.message); }
+    };
+  }
+  api("/api/settings").then(renderSettings).catch(() => {});
+}
