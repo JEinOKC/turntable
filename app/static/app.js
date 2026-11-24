@@ -149,6 +149,12 @@ function draw() {
   for (let i = 0; i < bands.length; i++) bands[i] *= 0.97;
   level *= 0.97;
   if ($("viz").clientWidth !== viewW || $("viz").clientHeight !== viewH) resize();
+  if (styles[style] !== scope) {  // the waveform fades its trails, so it keeps the last frame
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.restore();
+  }
   styles[style](viewW, viewH);
   raf = requestAnimationFrame(draw);
 }
