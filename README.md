@@ -6,7 +6,7 @@ Play a record and hear it on your Sonos speakers. A Raspberry Pi records the tur
 
 ## What it does
 
-- **Drop the needle and it plays.** When music starts, the chosen rooms (Living Room by default) start by themselves. They stop after five minutes of silence. A needle left clicking in the run-out groove counts as silence.
+- **Drop the needle and it plays.** When music starts, the rooms you pick on the control page start by themselves. They stop after five minutes of silence. A needle left clicking in the run-out groove counts as silence.
 - **Every Sonos room, from your phone.** Rooms are found on the network automatically. Switch any of them on or off and set its volume at `http://turntable.local`. Add the page to your home screen and it opens like an app.
 - **Knows the song.** Each track is identified with Shazam a few seconds after it starts, using the gap between tracks, the song's known length from the album track list, and a regular re-check. Title, artist, album and cover appear on the phone and the Pi's screen. Last.fm scrobbling is supported for whoever says they're listening.
 - **Visualizers.** Now Playing (above), a spinning record, spectrum bars, a waveform, and a fireplace, all driven by the music and timed to match the delay on the speakers. They work on the Pi's touchscreen and on your phone. You can choose what the Pi shows, or switch its screen off, from your phone. The screen sleeps when the music stops.
@@ -73,7 +73,7 @@ turntable ──USB──▶  │ ffmpeg ──MP3──▶ Icecast :8000/turnta
 | `ALSA_DEVICE` | `hw:CODEC` | Capture device (`arecord -l` lists them) |
 | `LASTFM_API_KEY`, `LASTFM_API_SECRET` | | Optional. From a [Last.fm API account](https://www.last.fm/api/account/create); enables scrobbling. |
 
-The switches on the control page are saved to `~/.config/turntable/settings.json`. That file also holds `auto_rooms` (which rooms auto-play) and `idle_minutes` (how long silence lasts before rooms stop and the screen sleeps).
+The switches on the control page, including which rooms auto-play, are saved to `~/.config/turntable/settings.json`. That file also holds `idle_minutes` (how long silence lasts before rooms stop and the screen sleeps).
 
 After editing either file, restart: `sudo systemctl restart turntable`.
 

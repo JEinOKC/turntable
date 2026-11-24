@@ -105,3 +105,12 @@ body.kiosk .kiosk-hide { display: none !important; }
 #np-view.portrait .np-text { left: 40px; right: 40px; top: 440px; text-align: center; }
 /* The bars get their own small canvas, so only that strip changes each frame. */
 #np-bars { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; height: 46px; }
+.setting.auto { flex-wrap: wrap; }
+.setting.auto .chips { flex-basis: 100%; margin-top: 10px; }
+.setting small { display: block; color: var(--muted); font-size: 13px; }
+button.small { padding: 6px 12px; font-size: 14px; margin-left: auto; margin-right: 10px; }
+#listening h2 small { font-weight: 400; margin-left: 6px; }
+.chips button { padding: 8px 14px; border-radius: 999px; font-size: 15px; }
+.chips button[aria-pressed=true] { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; }
+#now.status #art { display: none; }

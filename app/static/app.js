@@ -15,6 +15,8 @@ async function api(path, body) {
 }
 
 function renderRooms(rooms) {
+  roomNames = rooms.map((r) => r.name);
+  renderAutoRooms();
   const list = $("rooms");
   if (!rooms.length) {
     list.innerHTML = '<li class="empty">No Sonos rooms found.</li>';
@@ -455,12 +457,33 @@ addEventListener("resize", () => { if (!$("viz").hidden) resize(); });
 
 // ---------- settings ----------
 
+// Which rooms auto-play: chips for every room found, plus any chosen room that's away right now.
+let settingsState = null, roomNames = [];
+
+function renderAutoRooms() {
+  if (!settingsState || kiosk) return;
+  const chosen = settingsState.auto_rooms;
+  const names = [...new Set([...roomNames, ...chosen])].sort();
+  $("auto-hint").textContent = chosen.length ? "" : "Pick the rooms below";
+  $("auto-rooms").replaceChildren(...names.map((name) => {
+    const b = document.createElement("button");
+    b.textContent = name;
+    b.setAttribute("aria-pressed", chosen.includes(name));
+    b.onclick = async () => {
+      const rooms = chosen.includes(name) ? chosen.filter((n) => n !== name) : [...chosen, name];
+      try { renderSettings(await api("/api/settings", { auto_rooms: rooms })); } catch (e) { alert(e.message); }
+    };
+    return b;
+  }));
+}
+
 function renderSettings(st) {
   for (const t of document.querySelectorAll("#settings .toggle")) {
     t.setAttribute("aria-pressed", st[t.dataset.key]);
     t.classList.remove("busy");
   }
-  $("auto-label").textContent = `Auto-play ${st.auto_rooms.join(" & ")} when a record starts`;
+  settingsState = st;
+  renderAutoRooms();
 }
 
 if (!kiosk) {

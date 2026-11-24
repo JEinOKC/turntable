@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Turntable">
-<link rel="stylesheet" href="/static/style.css?v=20">
+<link rel="stylesheet" href="/static/style.css?v=22">
 </head>
 <body>
 <main id="controls">
@@ -41,7 +41,11 @@
   </section>
   <section id="settings" class="kiosk-hide">
     <h2>Settings</h2>
-    <div class="setting"><span id="auto-label">Auto-play</span><button class="toggle" data-key="auto_play" aria-pressed="false"></button></div>
+    <div class="setting auto">
+      <span>Auto-play when a record starts<small id="auto-hint"></small></span>
+      <button class="toggle" data-key="auto_play" aria-pressed="false"></button>
+      <div id="auto-rooms" class="chips"></div>
+    </div>
     <div class="setting"><span>Show song on visualizer</span><button class="toggle" data-key="song_overlay" aria-pressed="false"></button></div>
     <div class="setting"><span>Sleep Pi screen when idle</span><button class="toggle" data-key="screen_sleep" aria-pressed="false"></button></div>
     <div class="setting" id="lastfm" hidden>
@@ -76,6 +80,6 @@
   </div>
 </section>
 <div id="dark" hidden></div>
-<script src="/static/app.js?v=30"></script>
+<script src="/static/app.js?v=31"></script>
 </body>
 </html>

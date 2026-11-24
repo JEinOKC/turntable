@@ -88,7 +88,7 @@ def sonos_uri():
 
 DEFAULT_SETTINGS = {
     "auto_play": True,
-    "auto_rooms": ["Living Room"],
+    "auto_rooms": [],  # chosen on the control page
     "screen_sleep": True,
     "song_overlay": True,
     "idle_minutes": 5,
@@ -763,6 +763,8 @@ async def post_settings(request):
     for key in ("auto_play", "screen_sleep", "song_overlay"):
         if isinstance(body.get(key), bool):
             settings[key] = body[key]
+    if isinstance(body.get("auto_rooms"), list):
+        settings["auto_rooms"] = [r for r in body["auto_rooms"] if isinstance(r, str)]
     if isinstance(body.get("flac"), bool) and body["flac"] != settings["flac"]:
         error = await set_flac(body["flac"])
         if error:
