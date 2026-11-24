@@ -102,19 +102,41 @@ function openViz() {
   $("controls").hidden = true;
   $("viz").hidden = false;
   resize();
-  socket = new WebSocket(`ws://${location.host}/ws`);
-  socket.onmessage = (m) => {
+  connectViz();
+  showUi();
+  raf = requestAnimationFrame(draw);
+}
+
+// Phones drop the live feed now and then (sleep, switching apps, Wi-Fi blips); reconnect
+// whenever it closes or goes quiet, or the visuals freeze.
+let lastFrame = 0;
+function connectViz() {
+  socket?.close();
+  const ws = socket = new WebSocket(`ws://${location.host}/ws`);
+  lastFrame = performance.now();
+  ws.onmessage = (m) => {
+    lastFrame = performance.now();
     const f = JSON.parse(m.data);
     for (let i = 0; i < f.b.length; i++) bands[i] = Math.max(f.b[i], bands[i] * 0.85);
     wave = Float32Array.from(f.w);
     level = Math.max(f.l, level * 0.9);
   };
-  showUi();
-  raf = requestAnimationFrame(draw);
+  ws.onclose = () => {
+    if (socket === ws && !$("viz").hidden) setTimeout(() => socket === ws && connectViz(), 1000);
+  };
 }
+setInterval(() => {
+  // The server sends ~30 updates a second, so 5 quiet seconds means the feed has died.
+  if (!$("viz").hidden && performance.now() - lastFrame > 5000) connectViz();
+}, 2500);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && !$("viz").hidden) connectViz();
+});
 
 function closeViz() {
-  socket?.close();
+  const ws = socket;
+  socket = null;
+  ws?.close();
   cancelAnimationFrame(raf);
   $("viz").hidden = true;
   $("controls").hidden = false;
@@ -223,20 +245,29 @@ function bars(w, h) {
   }
 }
 
-// Glowing oscilloscope line that leaves trails.
+// Glowing oscilloscope line that leaves trails. Scales itself to the music so it neither
+// flatlines in quiet passages nor clips in loud ones.
+let wavePeak = 0.2;
 function scope(w, h) {
-  ctx.fillStyle = "rgba(0,0,0,.18)";
+  ctx.fillStyle = "rgba(0,0,0,.25)";
   ctx.fillRect(0, 0, w, h);
-  const hue = (performance.now() / 50) % 360, mid = h / 2;
+  let peak = 0;
+  for (const v of wave) peak = Math.max(peak, Math.abs(v));
+  wavePeak += (Math.max(peak, 0.05) - wavePeak) * 0.05;
+  const hue = (performance.now() / 50) % 360, mid = h / 2, scale = (h * 0.35) / wavePeak;
   ctx.lineWidth = 3;
+  ctx.lineJoin = "round";
   ctx.strokeStyle = `hsl(${hue} 100% 60%)`;
   ctx.shadowColor = ctx.strokeStyle;
   ctx.shadowBlur = 12;
   ctx.beginPath();
-  for (let i = 0; i < wave.length; i++) {
-    const x = (i / (wave.length - 1)) * w, y = mid + wave[i] * mid * 0.85;
-    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  const step = w / (wave.length - 1), y = (i) => mid + Math.max(-1.3, Math.min(1.3, wave[i] * scale / (h * 0.35))) * h * 0.35;
+  ctx.moveTo(0, y(0));
+  for (let i = 1; i < wave.length - 1; i++) {
+    // Curve through the midpoints for a smooth line instead of sharp zigzags.
+    ctx.quadraticCurveTo(i * step, y(i), (i + 0.5) * step, (y(i) + y(i + 1)) / 2);
   }
+  ctx.lineTo(w, y(wave.length - 1));
   ctx.stroke();
   ctx.shadowBlur = 0;
 }

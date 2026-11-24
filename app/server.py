@@ -218,7 +218,7 @@ class Audio:
         db = 20 * np.log10(np.array([mag[b].max() for b in self.band_bins]) + 1e-9)
         bands = np.clip((db + 70) / 70, 0, 1)
         recent = self.ring[-FFT_SIZE // 2:]
-        wave = np.clip(recent[np.linspace(0, len(recent) - 1, WAVE_POINTS).astype(int)] * 4, -1, 1)
+        wave = recent[np.linspace(0, len(recent) - 1, WAVE_POINTS).astype(int)]  # the page scales it
         level = min(max((self.level_db + 60) / 60, 0), 1)
         self.frames.append((time.monotonic(), json.dumps({
             "b": [round(x, 3) for x in bands.tolist()],
