@@ -80,6 +80,7 @@ DEFAULT_SETTINGS = {
     "auto_play": True,
     "auto_rooms": ["Living Room"],
     "screen_sleep": True,
+    "song_overlay": True,
     "idle_minutes": 5,
     "flac": False,
 }
@@ -567,6 +568,7 @@ async def status(request):
         "level_db": round(audio.avg_db, 1),
         **audio.capture_health(),
         "track": track,
+        "song_overlay": settings["song_overlay"],
         "stream": stream_url(),
     })
 
@@ -615,7 +617,7 @@ async def get_settings(request):
 @routes.post("/api/settings")
 async def post_settings(request):
     body = await request.json()
-    for key in ("auto_play", "screen_sleep"):
+    for key in ("auto_play", "screen_sleep", "song_overlay"):
         if isinstance(body.get(key), bool):
             settings[key] = body[key]
     if isinstance(body.get("flac"), bool) and body["flac"] != settings["flac"]:

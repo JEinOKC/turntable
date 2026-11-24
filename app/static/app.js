@@ -60,6 +60,15 @@ async function refreshStatus() {
     pill.textContent = !s.capturing ? "Turntable unplugged" : s.signal ? "Live" : "Silent";
     pill.classList.toggle("live", s.capturing && s.signal);
     $("now").hidden = !s.track;
+    const song = $("viz-song");
+    song.hidden = !(s.track && s.song_overlay);
+    if (s.track) {
+      song.querySelector(".song-title").textContent = s.track.title;
+      song.querySelector(".song-artist").textContent = s.track.artist;
+      const img = song.querySelector(".song-art");
+      if (img.getAttribute("src") !== (s.track.art || "")) img.src = s.track.art || "";
+      img.hidden = !s.track.art;
+    }
     if (s.track) {
       $("np-title").textContent = s.track.title;
       $("np-artist").textContent = [s.track.artist, s.track.album].filter(Boolean).join(" · ");
