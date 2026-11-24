@@ -169,19 +169,28 @@ function resize() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
-function draw() {
+// The Pi's desktop flips the upside-down screen in software, a full processor core at ~20
+// frames a second, so the Pi's screen gets fewer frames. Phones draw at their own rate.
+const FRAME_MS = kiosk ? 1000 / 12 : 0;
+let lastDraw = 0;
+
+function draw(now) {
+  raf = requestAnimationFrame(draw);
+  if (now - lastDraw < FRAME_MS) return;
+  lastDraw = now;
   $("np-view").hidden = styles[style] !== nowPlaying;
   for (let i = 0; i < bands.length; i++) bands[i] *= 0.97;
   level *= 0.97;
   if ($("viz").clientWidth !== viewW || $("viz").clientHeight !== viewH) resize();
-  if (styles[style] !== scope) {  // the waveform fades its trails, so it keeps the last frame
+  const np = styles[style] === nowPlaying;
+  $("canvas").hidden = np;  // Now Playing draws into its own small canvas
+  if (!np && styles[style] !== scope) {  // the waveform fades its trails, so it keeps the last frame
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     ctx.restore();
   }
   styles[style](viewW, viewH);
-  raf = requestAnimationFrame(draw);
 }
 
 // A spinning record with the spectrum radiating from its edge.
@@ -277,13 +286,23 @@ function scope(w, h) {
 
 // The identified song as a record sleeve with its record spinning out of it (layout in CSS);
 // the canvas only adds a row of bars along the bottom.
-function nowPlaying(w, h) {
-  ctx.clearRect(0, 0, w, h);
-  const n = bands.length, gap = 3, bw = (w - gap * (n + 1)) / n, maxH = Math.min(46, h * 0.1);
-  ctx.fillStyle = "rgba(232, 163, 61, .65)";
+const npRecord = document.querySelector(".np-record");
+const npBars = $("np-bars"), npCtx = npBars.getContext("2d");
+function nowPlaying(w) {
+  // Spin the record here (33⅓ rpm) rather than with a CSS animation, so it keeps to the frame cap.
+  npRecord.style.transform = `rotate(${((performance.now() / 1800) % 1) * 360}deg)`;
+  const dpr = devicePixelRatio || 1, bh = 46;
+  if (npBars.width !== Math.round(w * dpr)) {
+    npBars.width = Math.round(w * dpr);
+    npBars.height = bh * dpr;
+    npCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+  npCtx.clearRect(0, 0, w, bh);
+  const n = bands.length, gap = 3, bw = (w - gap * (n + 1)) / n;
+  npCtx.fillStyle = "rgba(232, 163, 61, .65)";
   for (let i = 0; i < n; i++) {
-    const bh = Math.max(2, bands[i] * maxH);
-    ctx.fillRect(gap + i * (bw + gap), h - bh, bw, bh);
+    const h = Math.max(2, bands[i] * bh);
+    npCtx.fillRect(gap + i * (bw + gap), bh - h, bw, h);
   }
 }
 
