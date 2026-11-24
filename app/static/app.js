@@ -64,8 +64,7 @@ async function refreshStatus() {
     $("now").hidden = !s.track && !message;
     $("now").classList.toggle("status", !s.track && !!message);
     if (!s.track && message) [$("np-title").textContent, $("np-artist").textContent] = message;
-    showNowPlaying(s.track);
-    document.querySelector("#np-view .np-status").textContent = !s.track && message ? message[0] : "";
+    showNowPlaying(s.track, message);
     const song = $("viz-song");
     song.hidden = !(s.track && s.song_overlay) || styles[style] === nowPlaying;
     if (s.track) {
@@ -129,7 +128,10 @@ function showUi() {
 }
 
 function resize() {
-  $("np-view").style.setProperty("--np-scale", Math.min(innerWidth / 800, innerHeight / 480));
+  const portrait = innerHeight > innerWidth;
+  $("np-view").classList.toggle("portrait", portrait);
+  $("np-view").style.setProperty("--np-scale", portrait ? Math.min(innerWidth / 480, innerHeight / 800)
+    : Math.min(innerWidth / 800, innerHeight / 480));
   const dpr = devicePixelRatio || 1;
   canvas.width = innerWidth * dpr;
   canvas.height = innerHeight * dpr;
@@ -239,20 +241,20 @@ function nowPlaying(w, h) {
 }
 
 let shownTrack = "";
-function showNowPlaying(track) {
-  const key = JSON.stringify(track || null);
+// Same layout whether or not the song was identified: placeholder cover and a status line until it is.
+function showNowPlaying(track, message) {
+  const key = JSON.stringify([track || null, message || null]);
   if (key === shownTrack) return;
   shownTrack = key;
   const view = $("np-view");
-  view.classList.toggle("empty", !track);
-  view.classList.toggle("no-art", !!track && !track.art);
-  if (!track) return;
-  for (const cls of ["np-bg", "np-sleeve", "np-label"]) {
-    view.querySelector("." + cls).src = track.art || "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
+  for (const el of view.querySelectorAll(".np-art")) {
+    el.style.backgroundImage = track?.art ? `url("${track.art}")` : "";
   }
-  view.querySelector(".np-title").textContent = track.title;
-  view.querySelector(".np-artist").textContent = track.artist;
-  view.querySelector(".np-album").textContent = track.album || "";
+  const [title, artist, album] = track ? [track.title, track.artist, track.album || ""]
+    : message ? [...message, ""] : ["Waiting for a record", "", ""];
+  view.querySelector(".np-title").textContent = title;
+  view.querySelector(".np-artist").textContent = artist;
+  view.querySelector(".np-album").textContent = album;
 }
 
 // A log fire whose flames flare with the music (classic "Doom fire" on a small grid, scaled up).

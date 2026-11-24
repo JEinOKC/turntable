@@ -74,19 +74,21 @@ body.kiosk .kiosk-hide { display: none !important; }
 #viz-song .song-artist { color: #bbb; font-size: 13px; }
 #viz-song div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-/* Now Playing visual: an 800×480 stage scaled to fit the screen. */
+/* Now Playing visual: an 800×480 stage (480×800 on a portrait phone) scaled to fit the screen. */
 #np-view { position: absolute; inset: 0; overflow: hidden; background: #000; }
 .np-stage { position: absolute; left: 50%; top: 50%; width: 800px; height: 480px;
   transform: translate(-50%, -50%) scale(var(--np-scale, 1)); }
-.np-bg { position: absolute; left: -400px; top: -300px; width: 1600px; height: 1080px; object-fit: cover;
+/* Cover art, or a placeholder until a song is identified. */
+.np-art { background: radial-gradient(circle at 30% 30%, #f2b56b 0, #d0663f 35%, #6b2b4f 70%, #231a3a 100%)
+  center / cover; }
+.np-bg { position: absolute; left: -600px; top: -600px; width: 2000px; height: 2000px;
   filter: blur(40px) brightness(.45); }
 .np-sleeve { position: absolute; left: 56px; top: 70px; width: 300px; height: 300px; border-radius: 6px;
-  object-fit: cover; box-shadow: 0 18px 40px rgba(0, 0, 0, .6); z-index: 2; }
+  box-shadow: 0 18px 40px rgba(0, 0, 0, .6); z-index: 2; }
 .np-record { position: absolute; left: 196px; top: 80px; width: 280px; height: 280px; border-radius: 50%;
   background: repeating-radial-gradient(circle, #111 0 2px, #161616 2px 4px);
   box-shadow: 0 10px 30px rgba(0, 0, 0, .5); z-index: 1; animation: np-spin 1.8s linear infinite; }
-.np-label { position: absolute; left: 50%; top: 50%; width: 96px; height: 96px; margin: -48px;
-  border-radius: 50%; object-fit: cover; background: var(--accent); }
+.np-label { position: absolute; left: 50%; top: 50%; width: 96px; height: 96px; margin: -48px; border-radius: 50%; }
 .np-record::after { content: ""; position: absolute; left: 50%; top: 50%; width: 8px; height: 8px;
   margin: -4px; border-radius: 50%; background: #111; }
 @keyframes np-spin { to { transform: rotate(360deg); } }
@@ -94,19 +96,7 @@ body.kiosk .kiosk-hide { display: none !important; }
 .np-title { font-size: 34px; font-weight: 700; line-height: 1.1; }
 .np-artist { font-size: 22px; margin-top: 10px; color: #ddd; }
 .np-album { font-size: 16px; margin-top: 6px; color: var(--muted); }
-/* Nothing identified yet: just the record, centred. */
-#np-view.empty .np-sleeve, #np-view.empty .np-text, #np-view.empty .np-bg { display: none; }
-#np-view.empty .np-record { left: 260px; top: 100px; }
-/* Identified but no cover: record on the left, text as usual. */
-#np-view.no-art .np-sleeve, #np-view.no-art .np-bg { display: none; }
-#np-view.no-art .np-record { left: 110px; top: 100px; }
-.setting small { display: block; color: var(--muted); font-size: 13px; }
-button.small { padding: 6px 12px; font-size: 14px; margin-left: auto; margin-right: 10px; }
-#listening h2 small { font-weight: 400; margin-left: 6px; }
-.chips { display: flex; flex-wrap: wrap; gap: 8px; }
-.chips button { padding: 8px 14px; border-radius: 999px; font-size: 15px; }
-.chips button[aria-pressed=true] { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
-.np-status { display: none; position: absolute; left: 0; right: 0; top: 400px; text-align: center;
-  color: var(--muted); font-size: 18px; }
-#np-view.empty .np-status { display: block; }
-#now.status #art { display: none; }
+#np-view.portrait .np-stage { width: 480px; height: 800px; }
+#np-view.portrait .np-sleeve { left: 70px; top: 90px; }
+#np-view.portrait .np-record { left: 160px; top: 100px; }
+#np-view.portrait .np-text { left: 40px; right: 40px; top: 440px; text-align: center; }

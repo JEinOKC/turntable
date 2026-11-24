@@ -587,7 +587,8 @@ routes = web.RouteTableDef()
 
 @routes.get("/")
 async def index(request):
-    return web.FileResponse(STATIC / "index.html")
+    # Always fetch the page fresh, so phones pick up updates instead of a cached old version.
+    return web.FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-cache"})
 
 
 @routes.get("/api/status")
