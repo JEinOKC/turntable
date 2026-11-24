@@ -393,7 +393,12 @@ async def blocking(fn, *args):
 # ---------- Pi screen ----------
 
 # What the Pi's own screen shows: the controls, a visualizer style, or nothing.
-screen = {"mode": "controls", "style": 0}
+# The last thing shown (other than off) survives restarts.
+SCREEN_FILE = SETTINGS_FILE.parent / "screen.json"
+try:
+    screen = {"mode": "controls", "style": 0, **json.loads(SCREEN_FILE.read_text())}
+except (OSError, ValueError):
+    screen = {"mode": "controls", "style": 0}
 screen_changed = time.monotonic()
 
 
@@ -404,6 +409,11 @@ def set_screen(mode=None, style=None):
         screen["mode"] = mode
     if isinstance(style, int) and style >= 0:
         screen["style"] = style
+    if screen["mode"] != "off":
+        try:
+            SCREEN_FILE.write_text(json.dumps(screen))
+        except OSError:
+            pass
     try:
         BACKLIGHT.write_text("0" if screen["mode"] == "off" else "255")
     except OSError as e:

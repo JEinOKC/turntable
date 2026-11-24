@@ -100,6 +100,7 @@ let bands = new Float32Array(48), wave = new Float32Array(96), level = 0, angle 
 const peaks = new Float32Array(48);
 
 function openViz() {
+  if (!kiosk) localStorage.vizOpen = "1";  // reopen it if the page reloads
   $("controls").hidden = true;
   $("viz").hidden = false;
   resize();
@@ -135,6 +136,7 @@ document.addEventListener("visibilitychange", () => {
 });
 
 function closeViz() {
+  if (!kiosk) delete localStorage.vizOpen;
   const ws = socket;
   socket = null;
   ws?.close();
@@ -496,3 +498,6 @@ if (!kiosk) {
   pollLastfm();
   setInterval(pollLastfm, 5000);
 }
+
+// Come back to the visualizer if it was open when the page last closed or reloaded.
+if (!kiosk && localStorage.vizOpen) openViz();

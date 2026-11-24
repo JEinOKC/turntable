@@ -5,7 +5,9 @@ restarted without interrupting what Sonos is playing. Change this file rarely.
 
 - Captures the turntable's USB audio with ffmpeg.
 - Streams 320 kbps MP3 to Icecast (:8000/turntable.mp3).
-- Serves lossless FLAC at :8001/turntable.flac while switched on.
+- Serves lossless FLAC at :8001/turntable.flac while switched on. Each listener gets
+  its own encoder started when it connects: Sonos goes silent on a shared FLAC stream
+  that was already running long before it joined.
 - Hands the raw audio to the control app at :8001/pcm (local only), for levels,
   song recognition and the visualizers.
 """
@@ -32,9 +34,8 @@ class Capture:
         self.captured = 0  # stereo samples read since capture started
         self.started = None
         self.pcm_listeners = set()
-        self.flac_proc = None
-        self.flac_header = None
-        self.flac_listeners = set()
+        self.flac_on = False
+        self.flac_listeners = set()  # each a queue of raw audio for that listener's encoder
 
     def command(self):
         icecast = f"icecast://source:{ICECAST_PASSWORD}@localhost:8000/{MOUNT}"
@@ -58,8 +59,8 @@ class Capture:
                 while True:
                     chunk = await proc.stdout.readexactly(CHUNK)
                     self.captured += CHUNK // 4
-                    self.feed_flac(chunk)
                     send(self.pcm_listeners, chunk)
+                    send(self.flac_listeners, chunk)
             except asyncio.IncompleteReadError:
                 pass
             self.running = False
@@ -85,59 +86,14 @@ class Capture:
             "xruns": self.xruns,
             "capture_seconds": round(elapsed, 1),
             "missing_seconds": round(elapsed - self.captured / RATE, 2),
-            "flac": self.flac_header is not None,
+            "flac": self.flac_on,
         }
 
-    # Lossless stream: a separate encoder fed from the same capture, so it can
-    # start and stop without interrupting the MP3 stream.
-
-    async def start_flac(self, timeout=10):
-        if not self.flac_proc:
-            self.flac_proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-hide_banner", "-loglevel", "error",
-                "-f", "s16le", "-ar", str(RATE), "-ac", "2", "-i", "pipe:0",
-                "-c:a", "flac", "-compression_level", "0", "-flush_packets", "1", "-f", "flac", "pipe:1",
-                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
-            asyncio.create_task(self.read_flac(self.flac_proc))
-        deadline = time.monotonic() + timeout
-        while self.flac_header is None and time.monotonic() < deadline:
-            await asyncio.sleep(0.2)
-        return self.flac_header is not None
-
-    def stop_flac(self):
-        if self.flac_proc:
-            self.flac_proc.stdin.close()
-            self.flac_proc = None
-
-    def feed_flac(self, chunk):
-        proc = self.flac_proc
-        if proc and not proc.stdin.is_closing():
-            if proc.stdin.transport.get_write_buffer_size() > RATE * 4 * 5:
-                print("flac encoder fell behind; stopping it", flush=True)
-                self.stop_flac()
-            else:
-                proc.stdin.write(chunk)
-
-    async def read_flac(self, proc):
-        """Split the encoder's output into its header (sent to each new listener) and audio frames."""
-        reader = proc.stdout
-        try:
-            header = await reader.readexactly(4)  # "fLaC"
-            last = False
-            while not last:
-                block = await reader.readexactly(4)
-                last = bool(block[0] & 0x80)
-                header += block + await reader.readexactly(int.from_bytes(block[1:], "big"))
-            self.flac_header = header
-            while chunk := await reader.read(65536):
-                send(self.flac_listeners, chunk)
-        except asyncio.IncompleteReadError:
-            pass
-        finally:
-            self.flac_header = None
+    def set_flac(self, on):
+        self.flac_on = on
+        if not on:
             for q in list(self.flac_listeners):
                 close(self.flac_listeners, q)
-            await proc.wait()
 
 
 def send(listeners, chunk):
@@ -161,21 +117,13 @@ capture = Capture()
 routes = web.RouteTableDef()
 
 
-async def stream(request, listeners, content_type, first=b"", sync=None):
-    resp = web.StreamResponse(headers={"Content-Type": content_type, "Cache-Control": "no-cache",
-                                       "icy-name": "Turntable"})
+async def stream(request, listeners, content_type):
+    resp = web.StreamResponse(headers={"Content-Type": content_type, "Cache-Control": "no-cache"})
     await resp.prepare(request)
-    if first:
-        await resp.write(first)
     q = asyncio.Queue(maxsize=200)
     listeners.add(q)
     try:
         while (chunk := await q.get()) is not None:
-            if sync:
-                i = chunk.find(sync)
-                if i < 0:
-                    continue
-                chunk, sync = chunk[i:], None
             await resp.write(chunk)
     except (ConnectionResetError, asyncio.CancelledError):
         pass
@@ -186,10 +134,43 @@ async def stream(request, listeners, content_type, first=b"", sync=None):
 
 @routes.get(FLAC_PATH)
 async def flac(request):
-    if capture.flac_header is None:
+    """A fresh FLAC encoder for this listener, fed live from the capture."""
+    if not capture.flac_on:
         raise web.HTTPServiceUnavailable(text="Lossless stream is off")
-    # Join at the next frame boundary (FLAC frame sync code 0xFFF8).
-    return await stream(request, capture.flac_listeners, "audio/flac", capture.flac_header, b"\xff\xf8")
+    proc = await asyncio.create_subprocess_exec(
+        "ffmpeg", "-hide_banner", "-loglevel", "error",
+        "-f", "s16le", "-ar", str(RATE), "-ac", "2", "-i", "pipe:0",
+        "-c:a", "flac", "-compression_level", "0", "-flush_packets", "1", "-f", "flac", "pipe:1",
+        stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
+    q = asyncio.Queue(maxsize=200)
+    capture.flac_listeners.add(q)
+
+    async def feed():
+        try:
+            while (chunk := await q.get()) is not None:
+                proc.stdin.write(chunk)
+                await proc.stdin.drain()
+        except (ConnectionResetError, BrokenPipeError):
+            pass
+        finally:
+            proc.stdin.close()
+
+    feeder = asyncio.create_task(feed())
+    resp = web.StreamResponse(headers={"Content-Type": "audio/flac", "Cache-Control": "no-cache",
+                                       "icy-name": "Turntable"})
+    try:
+        await resp.prepare(request)
+        while chunk := await proc.stdout.read(65536):
+            await resp.write(chunk)
+    except (ConnectionResetError, asyncio.CancelledError):
+        pass
+    finally:
+        capture.flac_listeners.discard(q)
+        feeder.cancel()
+        if proc.returncode is None:
+            proc.kill()
+        await proc.wait()
+    return resp
 
 
 @routes.get("/pcm")
@@ -207,10 +188,7 @@ async def health(request):
 
 @routes.post("/flac")
 async def set_flac(request):
-    if (await request.json()).get("on"):
-        await capture.start_flac()
-    else:
-        capture.stop_flac()
+    capture.set_flac(bool((await request.json()).get("on")))
     return web.json_response(capture.health())
 
 
