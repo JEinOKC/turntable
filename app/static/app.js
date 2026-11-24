@@ -59,8 +59,13 @@ async function refreshStatus() {
     const pill = $("signal");
     pill.textContent = !s.capturing ? "Turntable unplugged" : s.signal ? "Live" : "Silent";
     pill.classList.toggle("live", s.capturing && s.signal);
-    $("now").hidden = !s.track;
+    const message = { searching: ["Listening…", "Identifying the song"],
+      unknown: ["Couldn't identify this song", "Shazam didn't recognise it"] }[s.identify];
+    $("now").hidden = !s.track && !message;
+    $("now").classList.toggle("status", !s.track && !!message);
+    if (!s.track && message) [$("np-title").textContent, $("np-artist").textContent] = message;
     showNowPlaying(s.track);
+    document.querySelector("#np-view .np-status").textContent = !s.track && message ? message[0] : "";
     const song = $("viz-song");
     song.hidden = !(s.track && s.song_overlay) || styles[style] === nowPlaying;
     if (s.track) {

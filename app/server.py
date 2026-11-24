@@ -444,6 +444,8 @@ def set_screen(mode=None, style=None):
 # ---------- what's playing (Shazam) ----------
 
 track = None  # {"title", "artist", "album", "art"} of the song on the turntable
+# Where identifying the current song stands: None (no music), "searching", "found" or "unknown".
+id_state = None
 shazam = None
 
 
@@ -482,28 +484,38 @@ async def tell_icecast(song):
 
 async def follow_tracks():
     """Identify the song a few seconds into each track; vinyl's gaps between tracks mark the changes."""
-    global track
+    global track, id_state
     gaps = audio.gaps
     due = None  # when to next ask Shazam
     tries = 0
     last_id = 0
+    recheck = False  # a routine re-check of a song already identified
     while True:
         await asyncio.sleep(1)
         now = time.monotonic()
         playing = audio.playing
         if not playing:
-            if now - audio.last_sound > settings["idle_minutes"] * 60 and track:
-                track = None
+            if now - audio.last_sound > settings["idle_minutes"] * 60:
+                track = id_state = None
             continue
-        if audio.gaps != gaps or due is None and now - last_id > RECHECK_SECONDS:
+        new_track = audio.gaps != gaps or id_state is None
+        if new_track or due is None and now - last_id > RECHECK_SECONDS:
             gaps = audio.gaps
-            due, tries = now + IDENTIFY_AFTER, 0
+            due, tries, recheck = now + IDENTIFY_AFTER, 0, not new_track
+            if new_track:
+                id_state = "searching"
         if due and now >= due:
             last_id = now
             tries += 1
             matched = await identify()
-            # One retry later in the track if Shazam didn't know it.
-            due = None if matched or tries >= 2 else now + 20
+            if matched:
+                id_state, due = "found", None
+            elif tries < 2:
+                due = now + 20  # one retry later in the track
+            else:
+                due = None
+                if not recheck:  # a new song Shazam doesn't know: don't keep showing the last one
+                    track, id_state = None, "unknown"
 
 
 # ---------- follow the music ----------
@@ -588,6 +600,7 @@ async def status(request):
         "level_db": round(audio.avg_db, 1),
         **audio.capture_health(),
         "track": track,
+        "identify": id_state,
         "song_overlay": settings["song_overlay"],
         "stream": stream_url(),
     })
