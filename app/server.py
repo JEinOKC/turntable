@@ -83,7 +83,6 @@ DEFAULT_SETTINGS = {
     "auto_rooms": ["Living Room"],
     "screen_sleep": True,
     "song_overlay": True,
-    "scrobble": True,
     "idle_minutes": 5,
     "flac": False,
 }
@@ -456,8 +455,7 @@ async def identify():
         track = new
         print(f"now playing: {new['artist']} - {new['title']}", flush=True)
         await tell_icecast(f"{new['artist']} - {new['title']}")
-        if settings["scrobble"]:
-            await lastfm.song_changed(new, started_ago=IDENTIFY_AFTER)
+        await lastfm.song_changed(new, started_ago=IDENTIFY_AFTER)
     return True
 
 
@@ -485,8 +483,6 @@ async def follow_tracks():
         if not playing:
             if now - audio.last_sound > settings["idle_minutes"] * 60 and track:
                 track = None
-                if settings["scrobble"]:
-                    await lastfm.song_changed(None)
             continue
         if audio.gaps != gaps or due is None and now - last_id > RECHECK_SECONDS:
             gaps = audio.gaps
@@ -531,11 +527,17 @@ async def follow_music():
                         print(f"auto-play {name}: {e}", flush=True)
         elif playing and now - quiet_since >= idle:
             playing = False
+            await lastfm.end_session()
             if settings["auto_play"]:
                 try:
                     await blocking(stop_all)
                 except Exception as e:
                     print(f"auto-stop: {e}", flush=True)
+
+        # Whoever picked themselves stops scrobbling after a quiet spell, even if no music came.
+        if (lastfm.listeners and not playing
+                and now - quiet_since >= idle and time.monotonic() - lastfm.chosen_at >= idle):
+            await lastfm.end_session()
 
         if (settings["screen_sleep"] and screen["mode"] != "off"
                 and now - quiet_since >= idle and now - screen_changed >= idle):
@@ -624,7 +626,7 @@ async def get_settings(request):
 @routes.post("/api/settings")
 async def post_settings(request):
     body = await request.json()
-    for key in ("auto_play", "screen_sleep", "song_overlay", "scrobble"):
+    for key in ("auto_play", "screen_sleep", "song_overlay"):
         if isinstance(body.get(key), bool):
             settings[key] = body[key]
     if isinstance(body.get("flac"), bool) and body["flac"] != settings["flac"]:
@@ -664,18 +666,25 @@ async def lastfm_status(request):
 async def lastfm_connect(request):
     if not lastfm.configured():
         raise web.HTTPServiceUnavailable(text="Last.fm keys aren't set up on the Pi.")
-    return web.json_response({"url": await lastfm.start_auth()})
+    token, url = await lastfm.start_auth()
+    return web.json_response({"token": token, "url": url})
 
 
 @routes.post("/api/lastfm/finish")
 async def lastfm_finish(request):
-    await lastfm.finish_auth()
+    name = await lastfm.finish_auth((await request.json())["token"])
+    return web.json_response({**lastfm.status(), "linked": name})
+
+
+@routes.post("/api/lastfm/listeners")
+async def lastfm_listeners(request):
+    await lastfm.set_listeners((await request.json())["names"])
     return web.json_response(lastfm.status())
 
 
 @routes.post("/api/lastfm/unlink")
 async def lastfm_unlink(request):
-    lastfm.unlink()
+    lastfm.unlink((await request.json())["name"])
     return web.json_response(lastfm.status())
 
 

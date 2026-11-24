@@ -403,30 +403,48 @@ if (!kiosk) {
 
 // ---------- Last.fm ----------
 
+let lastfmState = null;
+
 function renderLastfm(st) {
+  lastfmState = st;
   $("lastfm").hidden = !st.configured;
-  $("lastfm-user").textContent = st.user ? `as ${st.user}` : "Not connected";
-  $("lastfm-connect").hidden = !!st.user;
-  $("lastfm").querySelector(".toggle").hidden = !st.user;
+  $("lastfm-accounts").textContent = st.accounts.length ? st.accounts.join(", ") : "None linked";
+  $("listening").hidden = !st.configured || !st.accounts.length;
+  $("listeners").replaceChildren(...[...st.accounts, null].map((name) => {
+    const b = document.createElement("button");
+    b.textContent = name ?? "Nobody";
+    const on = name ? st.listeners.includes(name) : !st.listeners.length;
+    b.setAttribute("aria-pressed", on);
+    b.onclick = () => {
+      const names = name === null ? []
+        : on ? st.listeners.filter((n) => n !== name) : [...st.listeners, name];
+      api("/api/lastfm/listeners", { names }).then(renderLastfm).catch((e) => alert(e.message));
+    };
+    return b;
+  }));
 }
 
 if (!kiosk) {
   $("lastfm-connect").onclick = async () => {
     // Open the tab now (inside the tap) so the phone doesn't block it, then point it at Last.fm.
     const tab = window.open("", "_blank");
+    let token;
     try {
-      const { url } = await api("/api/lastfm/connect", {});
-      tab.location = url;
+      const auth = await api("/api/lastfm/connect", {});
+      token = auth.token;
+      tab.location = auth.url;
     } catch (e) {
       tab?.close();
       return alert(e.message);
     }
-    // Wait for you to allow access on Last.fm.
+    // Wait for them to allow access on Last.fm.
     for (let i = 0; i < 60; i++) {
       await new Promise((r) => setTimeout(r, 3000));
-      const st = await api("/api/lastfm/finish", {}).catch(() => null);
-      if (st?.user) return renderLastfm(st);
+      const st = await api("/api/lastfm/finish", { token }).catch(() => null);
+      if (st?.linked) return renderLastfm(st);
     }
   };
-  api("/api/lastfm").then(renderLastfm).catch(() => {});
+  const pollLastfm = () => api("/api/lastfm").then(renderLastfm).catch(() => {});
+  pollLastfm();
+  setInterval(pollLastfm, 5000);
 }

@@ -1,7 +1,10 @@
-"""Last.fm scrobbling for songs identified on the turntable.
+"""Last.fm scrobbling for songs identified on the turntable, for whoever is listening.
 
-Uses Last.fm's desktop auth flow: the control page sends you to Last.fm to allow
-access once, and the session key it returns is kept on the Pi.
+Each person links their Last.fm account once (desktop auth flow: the control page
+sends them to Last.fm to allow access, and the session key is kept on the Pi).
+Someone then picks who's listening on their phone. Nobody is picked by default,
+so nothing is scrobbled unless someone chooses to be, and the choice expires when
+the listening session ends. Picking late still scrobbles the session's earlier songs.
 """
 import hashlib
 import json
@@ -15,12 +18,13 @@ API = "https://ws.audioscrobbler.com/2.0/"
 AUTH_PAGE = "https://www.last.fm/api/auth/"
 API_KEY = os.environ.get("LASTFM_API_KEY", "")
 API_SECRET = os.environ.get("LASTFM_API_SECRET", "")
-SESSION_FILE = Path.home() / ".config" / "turntable" / "lastfm.json"
+ACCOUNTS_FILE = Path.home() / ".config" / "turntable" / "lastfm.json"
 MIN_PLAY_SECONDS = 30  # Last.fm ignores plays shorter than this
 
-session = {}  # {"key", "name"} once linked
-pending_token = None
-playing = None  # {"track": {...}, "started": unix time} of the song to scrobble when it ends
+accounts = {}  # Last.fm username -> session key
+listeners = set()  # usernames scrobbling right now
+chosen_at = 0.0  # when listeners last changed
+session = []  # songs this listening session: {"track", "started", "ended", "scrobbled": set()}
 
 
 def configured():
@@ -28,15 +32,21 @@ def configured():
 
 
 def load():
-    global session
+    global accounts
     try:
-        session = json.loads(SESSION_FILE.read_text())
+        accounts = json.loads(ACCOUNTS_FILE.read_text()).get("accounts", {})
     except (OSError, ValueError):
-        session = {}
+        accounts = {}
+
+
+def save():
+    ACCOUNTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ACCOUNTS_FILE.write_text(json.dumps({"accounts": accounts}))
+    ACCOUNTS_FILE.chmod(0o600)
 
 
 def status():
-    return {"configured": configured(), "user": session.get("name")}
+    return {"configured": configured(), "accounts": sorted(accounts), "listeners": sorted(listeners)}
 
 
 async def call(method, http_method="POST", **params):
@@ -54,60 +64,95 @@ async def call(method, http_method="POST", **params):
     return data
 
 
+# ---------- linking accounts ----------
+
 async def start_auth():
-    """Returns the Last.fm page where you allow access."""
-    global pending_token
-    pending_token = (await call("auth.getToken", "GET"))["token"]
-    return f"{AUTH_PAGE}?api_key={API_KEY}&token={pending_token}"
+    """A token and the Last.fm page where its owner allows access."""
+    token = (await call("auth.getToken", "GET"))["token"]
+    return token, f"{AUTH_PAGE}?api_key={API_KEY}&token={token}"
 
 
-async def finish_auth():
-    """Call after allowing access on Last.fm. True once linked."""
-    global session, pending_token
-    if not pending_token:
-        return bool(session)
+async def finish_auth(token):
+    """The linked username once access was allowed, else None."""
     try:
-        s = (await call("auth.getSession", "GET", token=pending_token))["session"]
+        s = (await call("auth.getSession", "GET", token=token))["session"]
     except RuntimeError:
-        return False  # not allowed yet
-    session = {"key": s["key"], "name": s["name"]}
-    SESSION_FILE.parent.mkdir(parents=True, exist_ok=True)
-    SESSION_FILE.write_text(json.dumps(session))
-    SESSION_FILE.chmod(0o600)
-    pending_token = None
-    return True
+        return None  # not allowed yet
+    accounts[s["name"]] = s["key"]
+    save()
+    return s["name"]
 
 
-def unlink():
-    global session
-    session = {}
-    SESSION_FILE.unlink(missing_ok=True)
+def unlink(name):
+    accounts.pop(name, None)
+    listeners.discard(name)
+    save()
 
+
+# ---------- who's listening ----------
+
+async def set_listeners(names):
+    global chosen_at
+    names = {n for n in names if n in accounts}
+    added = names - listeners
+    listeners.clear()
+    listeners.update(names)
+    chosen_at = time.monotonic()
+    for name in added:
+        for entry in session:
+            if entry["ended"]:
+                await scrobble(entry, [name])  # songs played before they picked
+        if session and not session[-1]["ended"]:
+            await now_playing(session[-1]["track"], [name])
+
+
+async def end_session():
+    """Music stopped for good: finish the last song, then forget who was listening."""
+    global chosen_at
+    if session and not session[-1]["ended"]:
+        session[-1]["ended"] = time.time()
+        await scrobble(session[-1], listeners)
+    listeners.clear()
+    session.clear()
+    chosen_at = time.monotonic()
+
+
+# ---------- songs ----------
 
 async def song_changed(track, started_ago=0):
-    """Scrobble the song that just ended (if it played long enough) and announce the new one."""
-    global playing
-    if not session:
+    """Called when a new song is identified (recorded even if nobody is listening, for late picks)."""
+    now = time.time()
+    if session and not session[-1]["ended"]:
+        session[-1]["ended"] = now - started_ago
+        await scrobble(session[-1], listeners)
+    session.append({"track": track, "started": now - started_ago, "ended": None, "scrobbled": set()})
+    await now_playing(track, listeners)
+
+
+async def now_playing(track, names):
+    for name in names:
+        await safe("track.updateNowPlaying", artist=track["artist"], track=track["title"],
+                   album=track.get("album"), sk=accounts[name])
+
+
+async def scrobble(entry, names):
+    if entry["ended"] - entry["started"] < MIN_PLAY_SECONDS:
         return
+    t = entry["track"]
+    for name in set(names) - entry["scrobbled"]:
+        if await safe("track.scrobble", artist=t["artist"], track=t["title"], album=t.get("album"),
+                      timestamp=int(entry["started"]), sk=accounts[name]):
+            entry["scrobbled"].add(name)
+            print(f"scrobbled for {name}: {t['artist']} - {t['title']}", flush=True)
+
+
+async def safe(method, **params):
     try:
-        await flush()
-        if track:
-            playing = {"track": track, "started": time.time() - started_ago}
-            await call("track.updateNowPlaying", artist=track["artist"], track=track["title"],
-                       album=track.get("album"), sk=session["key"])
+        await call(method, **params)
+        return True
     except Exception as e:
         print(f"lastfm: {e}", flush=True)
-
-
-async def flush():
-    """Scrobble the current song if it played long enough."""
-    global playing
-    done, playing = playing, None
-    if done and time.time() - done["started"] >= MIN_PLAY_SECONDS:
-        t = done["track"]
-        await call("track.scrobble", artist=t["artist"], track=t["title"], album=t.get("album"),
-                   timestamp=int(done["started"]), sk=session["key"])
-        print(f"scrobbled: {t['artist']} - {t['title']}", flush=True)
+        return False
 
 
 load()
