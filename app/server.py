@@ -51,6 +51,9 @@ GAP_SECONDS = 1.0  # a quiet stretch this long between loud parts counts as a ne
 # "Quiet" is relative to how loud the record has been: the surface noise between tracks
 # can be loud enough to pass for music on an absolute scale, but it's far below the songs.
 GAP_DROP_DB = 20
+PROFILE_BANDS = 16
+NOVELTY_WINDOW = 10  # seconds compared against the 10 before
+NOVELTY_LOG = Path.home() / ".cache" / "turntable" / "novelty.csv"
 IDENTIFY_AFTER = 10  # seconds into a track before asking Shazam
 CLIP_SECONDS = 12
 RECHECK_SECONDS = 60  # re-identify if no gap was heard (gapless albums, missed gaps)
@@ -124,6 +127,13 @@ class Audio:
         self.quiet_run = 0
         self.loud_run = 0
         self.music_db = -30.0  # running level of the music itself
+        # Sound profile for spotting song changes (being measured; doesn't trigger anything yet).
+        freqs = np.fft.rfftfreq(FRAME, 1 / RATE)
+        edges = np.geomspace(60, 16000, PROFILE_BANDS + 1)
+        self.profile_bins = [np.where((freqs >= lo) & (freqs < hi))[0] for lo, hi in zip(edges[:-1], edges[1:])]
+        self.profile_sum = np.zeros(PROFILE_BANDS)
+        self.profile_frames = 0
+        self.profiles = collections.deque(maxlen=2 * NOVELTY_WINDOW)  # one per second
         self.window = np.hanning(FFT_SIZE)
         self.ring = np.zeros(FFT_SIZE, dtype=np.float32)
         freqs = np.fft.rfftfreq(FFT_SIZE, 1 / VIS_RATE)
@@ -203,9 +213,32 @@ class Audio:
             self.quiet_run += 1
         else:
             self.loud_run = 0  # in between: neither music nor a gap
+        self.measure_profile(samples)
         if self.clients:
             # Average groups of 4 samples: 44.1 kHz down to the visualizer's 11 kHz.
             self.analyse_vis(samples[: len(samples) // 4 * 4].reshape(-1, 4).mean(axis=1))
+
+    def measure_profile(self, samples):
+        """Once a second, log how different the last 10 s sound from the 10 s before."""
+        mag = np.abs(np.fft.rfft(samples)) ** 2
+        self.profile_sum += [10 * np.log10(mag[b].mean() + 1e-12) for b in self.profile_bins]
+        self.profile_frames += 1
+        if self.profile_frames < FPS:
+            return
+        self.profiles.append(self.profile_sum / self.profile_frames)
+        self.profile_sum = np.zeros(PROFILE_BANDS)
+        self.profile_frames = 0
+        if len(self.profiles) < 2 * NOVELTY_WINDOW or not self.playing:
+            return
+        p = np.array(self.profiles)
+        novelty = float(np.abs(p[NOVELTY_WINDOW:].mean(axis=0) - p[:NOVELTY_WINDOW].mean(axis=0)).mean())
+        try:
+            NOVELTY_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with NOVELTY_LOG.open("a") as f:
+                title = (track or {}).get("title", "")
+                f.write(f"{time.time():.0f},{novelty:.2f},{self.level_db:.1f},{self.gaps},{title}\n")
+        except OSError:
+            pass
 
     @property
     def active_fraction(self):
@@ -395,17 +428,54 @@ async def identify():
         return False
     found = result.get("track")
     if not found:
-        return False
+        return None
     album = next((m.get("text") for sec in found.get("sections", []) for m in sec.get("metadata", [])
                   if m.get("title") == "Album"), None)
     new = {"title": found.get("title"), "artist": found.get("subtitle"), "album": album,
            "art": found.get("images", {}).get("coverart")}
-    if new != track:
-        track = new
-        print(f"now playing: {new['artist']} - {new['title']}", flush=True)
-        await tell_icecast(f"{new['artist']} - {new['title']}")
-        await lastfm.song_changed(new, started_ago=IDENTIFY_AFTER)
-    return True
+    if track and all(track.get(k) == new[k] for k in new):
+        return "same"
+    apple_id = next((a.get("id") for o in found.get("hub", {}).get("options", []) for a in o.get("actions", [])
+                     if a.get("type") == "applemusicplay"), None)
+    new.update(await album_position(found.get("albumadamid"), apple_id, new["title"]))
+    if track and track.get("next"):
+        print(f"predicted next: {track['next']}; got: {new['title']}", flush=True)
+    track = new
+    print(f"now playing: {new['artist']} - {new['title']} ({new.get('duration')}s)", flush=True)
+    await tell_icecast(f"{new['artist']} - {new['title']}")
+    await lastfm.song_changed(new, started_ago=time.monotonic() - started_estimate)
+    return "new"
+
+
+albums = {}  # Apple album id -> its tracks [{"id", "name", "seconds"}], in order
+
+
+async def album_position(album_id, apple_id, title):
+    """The song's length and the next song on the album, from Apple's public iTunes lookup."""
+    if not album_id:
+        return {}
+    if album_id not in albums:
+        try:
+            async with aiohttp.ClientSession() as http:
+                async with http.get("https://itunes.apple.com/lookup",
+                                    params={"id": album_id, "entity": "song"},
+                                    timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    results = (await resp.json(content_type=None)).get("results", [])
+        except Exception as e:
+            print(f"itunes lookup: {e}", flush=True)
+            return {}
+        songs = sorted((r for r in results if r.get("wrapperType") == "track"),
+                       key=lambda r: (r.get("discNumber", 1), r.get("trackNumber", 0)))
+        albums[album_id] = [{"id": str(r.get("trackId")), "name": r.get("trackName"),
+                             "seconds": round(r.get("trackTimeMillis", 0) / 1000)} for r in songs]
+    songs = albums[album_id]
+    i = next((i for i, t in enumerate(songs) if t["id"] == str(apple_id)), None)
+    if i is None:
+        i = next((i for i, t in enumerate(songs) if (t["name"] or "").lower() == (title or "").lower()), None)
+    if i is None:
+        return {}
+    return {"duration": songs[i]["seconds"] or None,
+            "next": songs[i + 1]["name"] if i + 1 < len(songs) else None}
 
 
 async def tell_icecast(song):
@@ -418,39 +488,64 @@ async def tell_icecast(song):
         print(f"icecast metadata: {e}", flush=True)
 
 
+started_estimate = 0.0  # when the current song began (monotonic), as best we can tell
+
+
 async def follow_tracks():
-    """Identify the song a few seconds into each track; vinyl's gaps between tracks mark the changes."""
-    global track, id_state
+    """Identify the song a few seconds into each track. Gaps between tracks, the song's known
+    length, and a regular re-check mark the changes."""
+    global track, id_state, started_estimate
     gaps = audio.gaps
     due = None  # when to next ask Shazam
     tries = 0
-    last_id = 0
-    recheck = False  # a routine re-check of a song already identified
+    reason = None  # why we're asking: "start" (gap or music began), "end" (song due to end), "recheck"
+    last_match = 0.0  # when Shazam last confirmed the current song
+    last_try = 0.0  # when the last round of asking finished, matched or not
+    gap_at = 0.0  # when the music came back after the latest gap
+    end_checked = False
     while True:
         await asyncio.sleep(1)
         now = time.monotonic()
-        playing = audio.playing
-        if not playing:
+        if not audio.playing:
             if now - audio.last_sound > settings["idle_minutes"] * 60:
                 track = id_state = None
             continue
-        new_track = audio.gaps != gaps or id_state is None
-        if new_track or due is None and now - last_id > RECHECK_SECONDS:
+        expected_end = started_estimate + track["duration"] if track and track.get("duration") else None
+        if audio.gaps != gaps or id_state is None:
             gaps = audio.gaps
-            due, tries, recheck = now + IDENTIFY_AFTER, 0, not new_track
-            if new_track:
-                id_state = "searching"
-        if due and now >= due:
-            last_id = now
-            tries += 1
-            matched = await identify()
-            if matched:
-                id_state, due = "found", None
-            elif tries < 2:
+            due, tries, reason, gap_at = now + IDENTIFY_AFTER, 0, "start", now
+            id_state = "searching"
+        elif due is None and expected_end and not end_checked and now >= expected_end + 10:
+            due, tries, reason, end_checked = now, 0, "end", True
+        elif due is None and now - max(last_match, last_try) > RECHECK_SECONDS:
+            due, tries, reason = now, 0, "recheck"
+        if not due or now < due:
+            continue
+        tries += 1
+        clip_start = now - CLIP_SECONDS
+        if reason == "end":
+            guess = expected_end
+        elif reason == "recheck":
+            guess = (last_match + clip_start) / 2  # it changed somewhere since the last confirmation
+        else:
+            guess = gap_at
+        before = started_estimate
+        started_estimate = guess
+        result = await identify()
+        if result:
+            if result == "same":
+                started_estimate = before
+            else:
+                end_checked = False
+            id_state, due, last_match = "found", None, time.monotonic()
+            last_try = last_match
+        else:
+            started_estimate = before
+            if tries < 2:
                 due = now + 20  # one retry later in the track
             else:
-                due = None
-                if not recheck:  # a new song Shazam doesn't know: don't keep showing the last one
+                due, last_try = None, time.monotonic()
+                if reason != "recheck":  # a new song Shazam doesn't know: don't keep showing the last one
                     track, id_state = None, "unknown"
 
 
