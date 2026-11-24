@@ -21,8 +21,11 @@ sudo systemctl enable turntable turntable-audio
 STAMP=~/.cache/turntable-audio.deployed
 mkdir -p ~/.cache
 if ! cat ~/turntable/audio.py turntable-audio.service | cmp -s - "$STAMP"; then
+  echo "audio.py changed: restarting the audio service (interrupts playback briefly)"
   sudo systemctl restart turntable-audio
   cat ~/turntable/audio.py turntable-audio.service > "$STAMP"
+  # Give the running control app time to put the playing rooms back before it restarts too.
+  sleep 30
 fi
 sudo systemctl restart turntable
 mkdir -p ~/.config/autostart
