@@ -413,7 +413,7 @@ function applyScreen(st) {
 
 async function followScreen() {
   try {
-    const st = await api("/api/screen");
+    const st = await api("/api/screen?kiosk");
     if (!screenState || st.mode !== screenState.mode || st.style !== screenState.style) applyScreen(st);
     screenState = st;
   } catch {}

@@ -707,9 +707,23 @@ async def stop(request):
     return web.json_response(await blocking(list_rooms))
 
 
+kiosk_seen = 0.0  # when the Pi's own screen last checked in
+
+
 @routes.get("/api/screen")
 async def get_screen(request):
+    global kiosk_seen
+    if "kiosk" in request.query:
+        kiosk_seen = time.monotonic()
     return web.json_response(screen)
+
+
+@routes.get("/api/kiosk-alive")
+async def kiosk_alive(request):
+    """For the Pi screen's watchdog: has the page checked in lately (it does every second)?"""
+    if time.monotonic() - kiosk_seen > 20:
+        raise web.HTTPServiceUnavailable(text="The Pi screen's page hasn't checked in")
+    return web.json_response({"ok": True})
 
 
 @routes.post("/api/screen")
