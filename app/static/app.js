@@ -60,8 +60,9 @@ async function refreshStatus() {
     pill.textContent = !s.capturing ? "Turntable unplugged" : s.signal ? "Live" : "Silent";
     pill.classList.toggle("live", s.capturing && s.signal);
     $("now").hidden = !s.track;
+    showNowPlaying(s.track);
     const song = $("viz-song");
-    song.hidden = !(s.track && s.song_overlay);
+    song.hidden = !(s.track && s.song_overlay) || styles[style] === nowPlaying;
     if (s.track) {
       song.querySelector(".song-title").textContent = s.track.title;
       song.querySelector(".song-artist").textContent = s.track.artist;
@@ -87,7 +88,7 @@ setInterval(refreshStatus, 2000);
 
 const canvas = $("canvas");
 const ctx = canvas.getContext("2d");
-const styles = [record, bars, scope, fireplace];
+const styles = [record, bars, scope, fireplace, nowPlaying];
 let style = +(localStorage.vizStyle || 0) % styles.length;
 let socket, raf, hideTimer;
 let bands = new Float32Array(48), wave = new Float32Array(96), level = 0, angle = 0;
@@ -123,6 +124,7 @@ function showUi() {
 }
 
 function resize() {
+  $("np-view").style.setProperty("--np-scale", Math.min(innerWidth / 800, innerHeight / 480));
   const dpr = devicePixelRatio || 1;
   canvas.width = innerWidth * dpr;
   canvas.height = innerHeight * dpr;
@@ -130,6 +132,7 @@ function resize() {
 }
 
 function draw() {
+  $("np-view").hidden = styles[style] !== nowPlaying;
   for (let i = 0; i < bands.length; i++) bands[i] *= 0.97;
   level *= 0.97;
   styles[style](innerWidth, innerHeight);
@@ -216,6 +219,35 @@ function scope(w, h) {
   }
   ctx.stroke();
   ctx.shadowBlur = 0;
+}
+
+// The identified song as a record sleeve with its record spinning out of it (layout in CSS);
+// the canvas only adds a row of bars along the bottom.
+function nowPlaying(w, h) {
+  ctx.clearRect(0, 0, w, h);
+  const n = bands.length, gap = 3, bw = (w - gap * (n + 1)) / n, maxH = Math.min(46, h * 0.1);
+  ctx.fillStyle = "rgba(232, 163, 61, .65)";
+  for (let i = 0; i < n; i++) {
+    const bh = Math.max(2, bands[i] * maxH);
+    ctx.fillRect(gap + i * (bw + gap), h - bh, bw, bh);
+  }
+}
+
+let shownTrack = "";
+function showNowPlaying(track) {
+  const key = JSON.stringify(track || null);
+  if (key === shownTrack) return;
+  shownTrack = key;
+  const view = $("np-view");
+  view.classList.toggle("empty", !track);
+  view.classList.toggle("no-art", !!track && !track.art);
+  if (!track) return;
+  for (const cls of ["np-bg", "np-sleeve", "np-label"]) {
+    view.querySelector("." + cls).src = track.art || "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
+  }
+  view.querySelector(".np-title").textContent = track.title;
+  view.querySelector(".np-artist").textContent = track.artist;
+  view.querySelector(".np-album").textContent = track.album || "";
 }
 
 // A log fire whose flames flare with the music (classic "Doom fire" on a small grid, scaled up).

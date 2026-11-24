@@ -43,7 +43,7 @@ button.wide { flex: 1; }
 button.accent { background: var(--accent); border-color: var(--accent); color: #111; font-weight: 600; }
 
 #viz { position: fixed; inset: 0; background: #000; }
-#canvas { width: 100%; height: 100%; display: block; }
+#canvas { position: relative; width: 100%; height: 100%; display: block; }
 #viz-ui { position: absolute; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom));
   display: flex; gap: 8px; transition: opacity .4s; }
 #viz-ui.hide { opacity: 0; }
@@ -73,3 +73,30 @@ body.kiosk .kiosk-hide { display: none !important; }
 #viz-song .song-title { font-weight: 600; font-size: 15px; }
 #viz-song .song-artist { color: #bbb; font-size: 13px; }
 #viz-song div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Now Playing visual: an 800×480 stage scaled to fit the screen. */
+#np-view { position: absolute; inset: 0; overflow: hidden; background: #000; }
+.np-stage { position: absolute; left: 50%; top: 50%; width: 800px; height: 480px;
+  transform: translate(-50%, -50%) scale(var(--np-scale, 1)); }
+.np-bg { position: absolute; left: -400px; top: -300px; width: 1600px; height: 1080px; object-fit: cover;
+  filter: blur(40px) brightness(.45); }
+.np-sleeve { position: absolute; left: 56px; top: 70px; width: 300px; height: 300px; border-radius: 6px;
+  object-fit: cover; box-shadow: 0 18px 40px rgba(0, 0, 0, .6); z-index: 2; }
+.np-record { position: absolute; left: 196px; top: 80px; width: 280px; height: 280px; border-radius: 50%;
+  background: repeating-radial-gradient(circle, #111 0 2px, #161616 2px 4px);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .5); z-index: 1; animation: np-spin 1.8s linear infinite; }
+.np-label { position: absolute; left: 50%; top: 50%; width: 96px; height: 96px; margin: -48px;
+  border-radius: 50%; object-fit: cover; background: var(--accent); }
+.np-record::after { content: ""; position: absolute; left: 50%; top: 50%; width: 8px; height: 8px;
+  margin: -4px; border-radius: 50%; background: #111; }
+@keyframes np-spin { to { transform: rotate(360deg); } }
+.np-text { position: absolute; left: 500px; right: 36px; top: 150px; }
+.np-title { font-size: 34px; font-weight: 700; line-height: 1.1; }
+.np-artist { font-size: 22px; margin-top: 10px; color: #ddd; }
+.np-album { font-size: 16px; margin-top: 6px; color: var(--muted); }
+/* Nothing identified yet: just the record, centred. */
+#np-view.empty .np-sleeve, #np-view.empty .np-text, #np-view.empty .np-bg { display: none; }
+#np-view.empty .np-record { left: 260px; top: 100px; }
+/* Identified but no cover: record on the left, text as usual. */
+#np-view.no-art .np-sleeve, #np-view.no-art .np-bg { display: none; }
+#np-view.no-art .np-record { left: 110px; top: 100px; }

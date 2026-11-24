@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Turntable">
-<link rel="stylesheet" href="/static/style.css?v=6">
+<link rel="stylesheet" href="/static/style.css?v=7">
 </head>
 <body>
 <main id="controls">
@@ -31,6 +31,7 @@
       <button data-mode="viz" data-style="1">Bars</button>
       <button data-mode="viz" data-style="2">Waveform</button>
       <button data-mode="viz" data-style="3">Fireplace</button>
+      <button data-mode="viz" data-style="4">Now Playing</button>
       <button data-mode="off">Off</button>
     </div>
   </section>
@@ -47,6 +48,14 @@
   </footer>
 </main>
 <section id="viz" hidden>
+  <div id="np-view" hidden>
+    <div class="np-stage">
+      <img class="np-bg" alt="">
+      <div class="np-record"><img class="np-label" alt=""></div>
+      <img class="np-sleeve" alt="">
+      <div class="np-text"><div class="np-title"></div><div class="np-artist"></div><div class="np-album"></div></div>
+    </div>
+  </div>
   <canvas id="canvas"></canvas>
   <div id="viz-song" class="song" hidden>
     <img class="song-art" alt="">
@@ -58,6 +67,6 @@
   </div>
 </section>
 <div id="dark" hidden></div>
-<script src="/static/app.js?v=12"></script>
+<script src="/static/app.js?v=13"></script>
 </body>
 </html>
