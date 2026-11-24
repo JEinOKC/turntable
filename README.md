@@ -10,17 +10,23 @@ Stream a record player to Sonos from a Raspberry Pi, with a control page for you
 
 ## How it works
 
+Two services, so the control app can be updated without interrupting playback:
+
 ```
-turntable ──USB audio──▶ ffmpeg ──MP3──▶ Icecast :8000 ──▶ Sonos
-                           │
-                           └─PCM─▶ server.py ──FLAC──▶ :80/turntable.flac ──▶ Sonos
-                                      │
-                                      ├─ level detection → auto-play / screen sleep
-                                      ├─ spectrum → WebSocket → visualizers
-                                      └─ control page + API on :80, Sonos via SoCo
+                    ┌─ audio.py (turntable-audio) ────────────────────────────┐
+turntable ──USB──▶  │ ffmpeg ──MP3──▶ Icecast :8000/turntable.mp3 ──▶ Sonos     │
+                    │   └─PCM─┬─▶ FLAC :8001/turntable.flac ─────────▶ Sonos     │
+                    │         └─▶ :8001/pcm (local) ─┐                          │
+                    └────────────────────────────────┼──────────────────────────┘
+                    ┌─ server.py (turntable) ─────────▼──────────────────────────┐
+                    │ level detection → auto-play / screen sleep                 │
+                    │ Shazam → now playing, Last.fm                              │
+                    │ spectrum → WebSocket → visualizers                         │
+                    │ control page + API on :80, Sonos via SoCo                  │
+                    └────────────────────────────────────────────────────────────┘
 ```
 
-Sonos plays a few seconds behind the live input, so the visualizer data is delayed to match.
+`deploy/push.sh` restarts the audio service only when `audio.py` itself changed, so most updates leave the music playing. Sonos plays a few seconds behind the live input, so the visualizer data is delayed to match.
 
 ## Hardware
 

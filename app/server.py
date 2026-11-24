@@ -1,8 +1,9 @@
 """Turntable → Sonos.
 
-Captures the turntable's USB audio, streams it (MP3 through Icecast, or
-lossless FLAC served here), tells Sonos rooms to play it, feeds a visualizer
-over a WebSocket, and starts/stops rooms and the Pi screen with the music.
+The control app: tells Sonos rooms to play the turntable, starts/stops rooms and
+the Pi screen with the music, identifies songs, feeds the visualizers, and serves
+the control page. The audio itself (capture and streams) is audio.py, a separate
+service, so this one can restart without interrupting playback.
 """
 import asyncio
 import collections
@@ -24,8 +25,7 @@ from shazamio import Shazam
 import lastfm
 
 ICECAST_PASSWORD = os.environ["ICECAST_SOURCE_PASSWORD"]
-ALSA_DEVICE = os.environ.get("ALSA_DEVICE", "hw:CODEC")
-GAIN_DB = float(os.environ.get("GAIN_DB", "0"))
+AUDIO = f"http://127.0.0.1:{os.environ.get('AUDIO_PORT', '8001')}"  # audio.py
 # Sonos plays a few seconds behind the live input; visuals wait to match.
 VISUAL_DELAY = float(os.environ.get("VISUAL_DELAY", "2.5"))
 PORT = int(os.environ.get("PORT", "80"))
@@ -67,7 +67,7 @@ def lan_ip():
 
 def stream_url():
     if settings["flac"]:
-        return f"http://{lan_ip()}{'' if PORT == 80 else f':{PORT}'}{FLAC_PATH}"
+        return f"http://{lan_ip()}:{AUDIO.rsplit(':', 1)[1]}{FLAC_PATH}"
     return f"http://{lan_ip()}:8000/{MOUNT}"
 
 
@@ -114,19 +114,12 @@ class Audio:
         self.treble_db = -120.0
         self.avg_treble = 0.0
         self.running = False
-        self.proc = None
-        self.flac_proc = None
-        self.flac_header = None
-        self.flac_listeners = set()
         self.last_sound = 0.0
         self.loud_frames = collections.deque(maxlen=ACTIVE_WINDOW * FPS)
         self.recent = collections.deque(maxlen=CLIP_SECONDS * FPS)
         self.gaps = 0  # quiet gaps seen between tracks
         self.quiet_run = 0
         self.loud_run = 0
-        self.xruns = 0
-        self.captured = 0  # stereo samples read since capture started
-        self.capture_started = None
         self.window = np.hanning(FFT_SIZE)
         self.ring = np.zeros(FFT_SIZE, dtype=np.float32)
         freqs = np.fft.rfftfreq(FFT_SIZE, 1 / VIS_RATE)
@@ -137,51 +130,26 @@ class Audio:
         self.band_bins = [b if len(b) else np.array([np.searchsorted(freqs, lo)])
                           for b, lo in zip(self.band_bins, edges[:-1])]
 
-    def command(self):
-        icecast = f"icecast://source:{ICECAST_PASSWORD}@localhost:8000/{MOUNT}"
-        return [
-            "ffmpeg", "-hide_banner", "-loglevel", "warning",
-            "-f", "alsa", "-ac", "2", "-ar", str(RATE), "-i", ALSA_DEVICE,
-            "-filter_complex", f"[0:a]volume={GAIN_DB}dB,asplit=2[mp3][pcm]",
-            "-map", "[mp3]", "-c:a", "libmp3lame", "-b:a", "320k",
-            "-content_type", "audio/mpeg", "-ice_name", "Turntable", "-f", "mp3", icecast,
-            "-map", "[pcm]", "-f", "s16le", "pipe:1",
-        ]
-
     async def run(self):
+        """Read the turntable audio from the audio service, reconnecting if it restarts."""
         while True:
-            proc = self.proc = await asyncio.create_subprocess_exec(
-                *self.command(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            self.running = True
-            self.captured, self.capture_started = 0, time.monotonic()
-            log_task = asyncio.create_task(self.read_log(proc))
             try:
-                while True:
-                    chunk = await proc.stdout.readexactly(FRAME * 4)
-                    self.captured += FRAME
-                    self.recent.append(chunk)
-                    self.feed_flac(chunk)
-                    stereo = np.frombuffer(chunk, dtype=np.int16).astype(np.float32).reshape(-1, 2) / 32768
-                    self.analyse(stereo.mean(axis=1))
-            except asyncio.IncompleteReadError:
-                pass
+                async with aiohttp.ClientSession() as http:
+                    async with http.get(f"{AUDIO}/pcm", timeout=aiohttp.ClientTimeout(sock_read=10)) as resp:
+                        self.running = True
+                        if settings["flac"]:  # the audio service may have restarted without it
+                            asyncio.create_task(self.start_flac())
+                        while True:
+                            chunk = await resp.content.readexactly(FRAME * 4)
+                            self.recent.append(chunk)
+                            stereo = np.frombuffer(chunk, dtype=np.int16).astype(np.float32).reshape(-1, 2) / 32768
+                            self.analyse(stereo.mean(axis=1))
+            except (aiohttp.ClientError, asyncio.IncompleteReadError, asyncio.TimeoutError) as e:
+                print(f"audio service: {e.__class__.__name__}", flush=True)
             self.running = False
-            await proc.wait()
-            await log_task
-            print(f"ffmpeg exited ({proc.returncode})", flush=True)
             self.level_db = -120.0
             self.avg_power = 0.0
-            await asyncio.sleep(3)
-
-    async def read_log(self, proc):
-        """Keep ffmpeg's stderr drained; count capture overruns (dropped audio)."""
-        while line := await proc.stderr.readline():
-            text = line.decode(errors="replace").strip()
-            if "dts to muxer" in text:
-                continue
-            if "xrun" in text.lower():
-                self.xruns += 1
-            print(f"ffmpeg: {text}", flush=True)
+            await asyncio.sleep(2)
 
     def clip_wav(self):
         """The last few seconds of audio as a mono 16 kHz WAV, for recognition."""
@@ -195,69 +163,11 @@ class Audio:
             w.writeframes(pcm.astype(np.int16).tobytes())
         return buf.getvalue()
 
-    def capture_health(self):
-        if not self.capture_started:
-            return {}
-        elapsed = time.monotonic() - self.capture_started
-        return {"xruns": self.xruns, "capture_seconds": round(elapsed, 1),
-                "missing_seconds": round(elapsed - self.captured / RATE, 2)}
-
-    # The lossless stream is a separate encoder fed from the same capture, so it can
-    # start and stop without interrupting the MP3 stream.
-
     async def start_flac(self, timeout=10):
-        if not self.flac_proc:
-            self.flac_proc = await asyncio.create_subprocess_exec(
-                "ffmpeg", "-hide_banner", "-loglevel", "error",
-                "-f", "s16le", "-ar", str(RATE), "-ac", "2", "-i", "pipe:0",
-                "-c:a", "flac", "-compression_level", "0", "-flush_packets", "1", "-f", "flac", "pipe:1",
-                stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE)
-            asyncio.create_task(self.read_flac(self.flac_proc))
-        deadline = time.monotonic() + timeout
-        while self.flac_header is None and time.monotonic() < deadline:
-            await asyncio.sleep(0.2)
-        return self.flac_header is not None
+        return (await audio_service("POST", "/flac", {"on": True})).get("flac", False)
 
     def stop_flac(self):
-        if self.flac_proc:
-            self.flac_proc.stdin.close()
-            self.flac_proc = None
-
-    def feed_flac(self, chunk):
-        proc = self.flac_proc
-        if proc and not proc.stdin.is_closing():
-            if proc.stdin.transport.get_write_buffer_size() > RATE * 4 * 5:
-                print("flac encoder fell behind; stopping it", flush=True)
-                self.stop_flac()
-            else:
-                proc.stdin.write(chunk)
-
-    async def read_flac(self, proc):
-        """Split the encoder's output into its header (sent to each new listener) and audio frames."""
-        reader = proc.stdout
-        try:
-            header = await reader.readexactly(4)  # "fLaC"
-            last = False
-            while not last:
-                block = await reader.readexactly(4)
-                last = bool(block[0] & 0x80)
-                header += block + await reader.readexactly(int.from_bytes(block[1:], "big"))
-            self.flac_header = header
-            while chunk := await reader.read(65536):
-                for q in list(self.flac_listeners):
-                    if q.full():
-                        self.flac_listeners.discard(q)
-                        q.put_nowait(None)
-                    else:
-                        q.put_nowait(chunk)
-        except asyncio.IncompleteReadError:
-            pass
-        finally:
-            self.flac_header = None
-            for q in list(self.flac_listeners):
-                self.flac_listeners.discard(q)
-                q.put_nowait(None)
-            await proc.wait()
+        asyncio.create_task(audio_service("POST", "/flac", {"on": False}))
 
     def analyse(self, samples):
         power = float(np.mean(samples ** 2))
@@ -326,6 +236,17 @@ class Audio:
 
 
 audio = Audio()
+
+
+async def audio_service(method, path, body=None):
+    try:
+        async with aiohttp.ClientSession() as http:
+            async with http.request(method, AUDIO + path, json=body,
+                                    timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                return await resp.json()
+    except Exception as e:
+        print(f"audio service {path}: {e.__class__.__name__}", flush=True)
+        return {}
 
 
 # ---------- Sonos ----------
@@ -599,7 +520,7 @@ async def status(request):
         "active": round(audio.active_fraction, 2),
         "treble_db": round(float(10 * np.log10(audio.avg_treble or 1e-12)), 1),
         "level_db": round(audio.avg_db, 1),
-        **audio.capture_health(),
+        **{k: v for k, v in (await audio_service("GET", "/health")).items() if k != "flac"},
         "track": track,
         "identify": id_state,
         "song_overlay": settings["song_overlay"],
@@ -713,33 +634,6 @@ async def lastfm_unlink(request):
     return web.json_response(lastfm.status())
 
 
-@routes.get(FLAC_PATH)
-async def flac_stream(request):
-    if not settings["flac"] or audio.flac_header is None:
-        raise web.HTTPServiceUnavailable(text="Lossless stream is off")
-    resp = web.StreamResponse(headers={"Content-Type": "audio/flac", "Cache-Control": "no-cache",
-                                       "icy-name": "Turntable"})
-    await resp.prepare(request)
-    await resp.write(audio.flac_header)
-    q = asyncio.Queue(maxsize=200)
-    audio.flac_listeners.add(q)
-    synced = False
-    try:
-        while (chunk := await q.get()) is not None:
-            if not synced:
-                # Join at the next frame boundary (FLAC frame sync code 0xFFF8).
-                i = chunk.find(b"\xff\xf8")
-                if i < 0:
-                    continue
-                chunk, synced = chunk[i:], True
-            await resp.write(chunk)
-    except (ConnectionResetError, asyncio.CancelledError):
-        pass
-    finally:
-        audio.flac_listeners.discard(q)
-    return resp
-
-
 @routes.get("/ws")
 async def ws(request):
     sock = web.WebSocketResponse(heartbeat=20)
@@ -755,8 +649,6 @@ async def ws(request):
 
 async def start_background(app):
     app["tasks"] = [asyncio.create_task(t) for t in (audio.run(), audio.broadcast(), follow_music(), follow_tracks())]
-    if settings["flac"]:
-        app["tasks"].append(asyncio.create_task(audio.start_flac(timeout=60)))
 
 
 def main():

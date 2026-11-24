@@ -14,9 +14,16 @@ if [ ! -f /etc/turntable.env ]; then
   sudo systemctl restart icecast2
 fi
 sudo systemctl enable --now icecast2
-sudo install -m 644 turntable.service /etc/systemd/system/turntable.service
+sudo install -m 644 turntable.service turntable-audio.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable turntable
+sudo systemctl enable turntable turntable-audio
+# Restart the audio service only when its code or unit changed: restarting it interrupts playback.
+STAMP=~/.cache/turntable-audio.deployed
+mkdir -p ~/.cache
+if ! cat ~/turntable/audio.py turntable-audio.service | cmp -s - "$STAMP"; then
+  sudo systemctl restart turntable-audio
+  cat ~/turntable/audio.py turntable-audio.service > "$STAMP"
+fi
 sudo systemctl restart turntable
 mkdir -p ~/.config/autostart
 install -m 644 kiosk.desktop ~/.config/autostart/turntable-kiosk.desktop

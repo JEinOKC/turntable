@@ -1,0 +1,15 @@
+[Unit]
+Description=Turntable audio: capture and streams
+After=network-online.target icecast2.service sound.target
+Wants=network-online.target icecast2.service
+
+[Service]
+User=pi
+EnvironmentFile=/etc/turntable.env
+ExecStart=/home/pi/turntable-venv/bin/python /home/pi/turntable/audio.py
+Restart=always
+RestartSec=3
+TimeoutStopSec=5
+
+[Install]
+WantedBy=multi-user.target

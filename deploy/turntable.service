@@ -1,7 +1,7 @@
 [Unit]
-Description=Turntable to Sonos
-After=network-online.target icecast2.service sound.target
-Wants=network-online.target icecast2.service
+Description=Turntable control app (Sonos, page, recognition)
+After=network-online.target turntable-audio.service
+Wants=network-online.target turntable-audio.service
 
 [Service]
 User=pi
