@@ -335,23 +335,34 @@ def is_turntable(uri):
 
 
 def room_state(zone):
-    group = zone.group
-    coord = group.coordinator
+    """None if the speaker can't be reached (e.g. a Roam that's switched off or away)."""
     try:
+        coord = zone.group.coordinator
         info = coord.get_current_transport_info()["current_transport_state"]
         uri = coord.get_current_track_info().get("uri", "")
-    except Exception:
-        info, uri = "UNKNOWN", ""
-    return {
-        "name": zone.player_name,
-        "on": info in ("PLAYING", "TRANSITIONING") and is_turntable(uri),
-        "volume": zone.volume,
-    }
+        return {
+            "name": zone.player_name,
+            "on": info in ("PLAYING", "TRANSITIONING") and is_turntable(uri),
+            "volume": zone.volume,
+        }
+    except Exception as e:
+        print(f"sonos {zone.ip_address} unreachable: {e.__class__.__name__}", flush=True)
+        return None
+
+
+def is_on(zone):
+    return bool((room_state(zone) or {}).get("on"))
 
 
 def discover():
-    zones = soco.discover(timeout=3) or set()
-    return sorted(zones, key=lambda z: z.player_name)
+    """Reachable Sonos rooms, by name. Speakers that are off or away are left out."""
+    named = []
+    for z in soco.discover(timeout=3) or set():
+        try:
+            named.append((z.player_name, z))
+        except Exception:
+            print(f"sonos {z.ip_address} unreachable", flush=True)
+    return [z for _, z in sorted(named, key=lambda nz: nz[0])]
 
 
 def find(name):
@@ -362,7 +373,7 @@ def find(name):
 
 
 def list_rooms():
-    return [room_state(z) for z in discover()]
+    return [st for st in map(room_state, discover()) if st]
 
 
 def turn_on(name):
@@ -371,7 +382,7 @@ def turn_on(name):
         if other is zone or other.player_name == name:
             continue
         coord = other.group.coordinator
-        if coord.player_name == other.player_name and room_state(other)["on"]:
+        if coord.player_name == other.player_name and is_on(other):
             zone.join(coord)
             return
     if zone.group.coordinator.player_name != zone.player_name:
@@ -389,12 +400,12 @@ def turn_off(name):
 
 def stop_all():
     for z in discover():
-        if room_state(z)["on"]:
+        if is_on(z):
             z.group.coordinator.stop()
 
 
 def playing_coordinators():
-    return [z for z in discover() if z.group.coordinator.player_name == z.player_name and room_state(z)["on"]]
+    return [z for z in discover() if is_on(z) and z.group.coordinator.player_name == z.player_name]
 
 
 def repoint(zones):
@@ -553,7 +564,7 @@ async def stream_ready():
 
 def turn_on_if_off(name):
     zone = find(name)
-    if not room_state(zone)["on"]:
+    if not is_on(zone):
         turn_on(name)
 
 
@@ -647,7 +658,7 @@ async def set_flac(on):
     await blocking(repoint, playing)
     if on and playing:
         await asyncio.sleep(8)
-        if not all(await blocking(lambda: [room_state(z)["on"] for z in playing])):
+        if not all(await blocking(lambda: [is_on(z) for z in playing])):
             settings["flac"] = False
             await blocking(repoint, playing)
             audio.stop_flac()
