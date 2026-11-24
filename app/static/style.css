@@ -89,6 +89,7 @@ body.kiosk .kiosk-hide { display: none !important; }
   background: repeating-radial-gradient(circle, #111 0 2px, #161616 2px 4px);
   box-shadow: 0 10px 30px rgba(0, 0, 0, .5); z-index: 1; animation: np-spin 1.8s linear infinite; }
 .np-label { position: absolute; left: 50%; top: 50%; width: 96px; height: 96px; margin: -48px; border-radius: 50%; }
+.np-label:not([style*="url"]) { background: var(--accent); }  /* plain orange label until there's a cover */
 .np-record::after { content: ""; position: absolute; left: 50%; top: 50%; width: 8px; height: 8px;
   margin: -4px; border-radius: 50%; background: #111; }
 @keyframes np-spin { to { transform: rotate(360deg); } }
