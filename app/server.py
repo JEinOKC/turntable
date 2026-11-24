@@ -48,9 +48,12 @@ WAVE_POINTS = 96
 TREBLE_DB = -55
 SOUND_SECONDS = 2  # sound must last this long before rooms auto-start
 GAP_SECONDS = 1.0  # a quiet stretch this long between loud parts counts as a new track
+# "Quiet" is relative to how loud the record has been: the surface noise between tracks
+# can be loud enough to pass for music on an absolute scale, but it's far below the songs.
+GAP_DROP_DB = 20
 IDENTIFY_AFTER = 10  # seconds into a track before asking Shazam
 CLIP_SECONDS = 12
-RECHECK_SECONDS = 180  # re-identify if no gap was heard (gapless albums)
+RECHECK_SECONDS = 60  # re-identify if no gap was heard (gapless albums, missed gaps)
 # Music is loud most of the time; the clicks of a needle left in the run-out groove are not.
 ACTIVE_WINDOW = 3  # seconds
 ACTIVE_FRACTION = 0.5
@@ -120,6 +123,7 @@ class Audio:
         self.gaps = 0  # quiet gaps seen between tracks
         self.quiet_run = 0
         self.loud_run = 0
+        self.music_db = -30.0  # running level of the music itself
         self.window = np.hanning(FFT_SIZE)
         self.ring = np.zeros(FFT_SIZE, dtype=np.float32)
         freqs = np.fft.rfftfreq(FFT_SIZE, 1 / VIS_RATE)
@@ -185,16 +189,20 @@ class Audio:
         self.avg_treble += (treble - self.avg_treble) * 0.03
         loud = self.treble_db > TREBLE_DB
         self.loud_frames.append(loud)
-        # Track gaps: a pop or crackle is too short to count as sound (needs ~100 ms).
-        if loud:
+        # Track gaps between songs. A pop or crackle is too short to count as sound (needs ~100 ms).
+        if loud and self.level_db > self.music_db - GAP_DROP_DB / 2:
+            self.music_db += (self.level_db - self.music_db) * 0.005  # follows the music over ~7 s
             self.loud_run += 1
             if self.loud_run >= 3:
                 if self.quiet_run >= GAP_SECONDS * FPS:
                     self.gaps += 1
+                    print(f"gap between tracks ({self.quiet_run / FPS:.1f}s)", flush=True)
                 self.quiet_run = 0
-        else:
+        elif self.level_db < self.music_db - GAP_DROP_DB:
             self.loud_run = 0
             self.quiet_run += 1
+        else:
+            self.loud_run = 0  # in between: neither music nor a gap
         if self.clients:
             # Average groups of 4 samples: 44.1 kHz down to the visualizer's 11 kHz.
             self.analyse_vis(samples[: len(samples) // 4 * 4].reshape(-1, 4).mean(axis=1))
