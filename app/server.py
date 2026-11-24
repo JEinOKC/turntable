@@ -132,13 +132,17 @@ class Audio:
 
     async def run(self):
         """Read the turntable audio from the audio service, reconnecting if it restarts."""
+        dropped = None  # rooms that were playing when the audio service went away
         while True:
             try:
                 async with aiohttp.ClientSession() as http:
                     async with http.get(f"{AUDIO}/pcm", timeout=aiohttp.ClientTimeout(sock_read=10)) as resp:
                         self.running = True
-                        if settings["flac"]:  # the audio service may have restarted without it
+                        if dropped:
+                            asyncio.create_task(reconnect_rooms(dropped))
+                        elif settings["flac"]:  # the audio service may have restarted without it
                             asyncio.create_task(self.start_flac())
+                        dropped = None
                         while True:
                             chunk = await resp.content.readexactly(FRAME * 4)
                             self.recent.append(chunk)
@@ -146,6 +150,9 @@ class Audio:
                             self.analyse(stereo.mean(axis=1))
             except (aiohttp.ClientError, asyncio.IncompleteReadError, asyncio.TimeoutError) as e:
                 print(f"audio service: {e.__class__.__name__}", flush=True)
+            if self.running and dropped is None:
+                # Sonos stops the moment its stream drops, so use the last known list.
+                dropped = list(playing_rooms)
             self.running = False
             self.level_db = -120.0
             self.avg_power = 0.0
@@ -495,6 +502,36 @@ async def stream_ready():
         raise web.HTTPServiceUnavailable(text="The lossless stream isn't ready yet.")
 
 
+playing_rooms = []  # rooms playing the turntable, refreshed every few seconds
+
+
+async def watch_rooms():
+    """Keep playing_rooms current, so the rooms can be put back if the audio service restarts."""
+    while True:
+        if audio.running:
+            try:
+                playing_rooms[:] = [z.player_name for z in await blocking(playing_coordinators)]
+            except Exception as e:
+                print(f"watching rooms: {e}", flush=True)
+        await asyncio.sleep(15)
+
+
+async def reconnect_rooms(names):
+    """Safety net: after the audio service restarts, put back the rooms that were playing."""
+    await asyncio.sleep(3)  # let the streams come back up
+    try:
+        await stream_ready()
+    except web.HTTPException:
+        print("reconnect: lossless stream not ready", flush=True)
+        return
+    for name in names:
+        try:
+            await blocking(turn_on_if_off, name)
+            print(f"reconnected {name}", flush=True)
+        except Exception as e:
+            print(f"reconnect {name}: {e}", flush=True)
+
+
 def turn_on_if_off(name):
     zone = find(name)
     if not is_on(zone):
@@ -648,7 +685,7 @@ async def ws(request):
 
 
 async def start_background(app):
-    app["tasks"] = [asyncio.create_task(t) for t in (audio.run(), audio.broadcast(), follow_music(), follow_tracks())]
+    app["tasks"] = [asyncio.create_task(t) for t in (audio.run(), audio.broadcast(), follow_music(), follow_tracks(), watch_rooms())]
 
 
 def main():
