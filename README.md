@@ -5,6 +5,7 @@ Stream a record player to Sonos from a Raspberry Pi, with a control page for you
 - **Rooms**: finds every Sonos room on the network; switch rooms on and off and set their volume.
 - **Auto-play**: starts chosen rooms when a record starts playing and stops them after a few minutes of silence.
 - **Pi screen**: shows the controls, a visualizer (spinning record, bars, waveform, fireplace), or switches off. You can change it from your phone. It sleeps when the music stops and wakes when it starts.
+- **What's playing**: identifies each song with Shazam and shows it on the page, the Pi screen, and optionally Last.fm.
 - **Lossless**: optional FLAC stream alongside the 320 kbps MP3, switchable without interrupting playback.
 
 ## How it works
@@ -51,6 +52,7 @@ Re-run `deploy/push.sh` after any change.
 | `GAIN_DB` | `0` | Input boost in dB |
 | `VISUAL_DELAY` | `2.5` | Seconds to delay the visuals so they match Sonos |
 | `ALSA_DEVICE` | `hw:CODEC` | Capture device (`arecord -l` lists them) |
+| `LASTFM_API_KEY`, `LASTFM_API_SECRET` | | Optional. From a [Last.fm API account](https://www.last.fm/api/account/create); enables scrobbling. Connect your account from the control page. |
 
 The settings on the control page are saved to `~/.config/turntable/settings.json`, where you can also change `auto_rooms` and `idle_minutes`.
 

@@ -10,7 +10,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Turntable">
-<link rel="stylesheet" href="/static/style.css?v=7">
+<link rel="stylesheet" href="/static/style.css?v=8">
 </head>
 <body>
 <main id="controls">
@@ -40,6 +40,11 @@
     <div class="setting"><span id="auto-label">Auto-play</span><button class="toggle" data-key="auto_play" aria-pressed="false"></button></div>
     <div class="setting"><span>Show song on visualizer</span><button class="toggle" data-key="song_overlay" aria-pressed="false"></button></div>
     <div class="setting"><span>Sleep Pi screen when idle</span><button class="toggle" data-key="screen_sleep" aria-pressed="false"></button></div>
+    <div class="setting" id="lastfm" hidden>
+      <span>Scrobble to Last.fm<small id="lastfm-user"></small></span>
+      <button id="lastfm-connect" class="small" hidden>Connect</button>
+      <button class="toggle" data-key="scrobble" aria-pressed="false"></button>
+    </div>
     <div class="setting"><span>Lossless (FLAC)</span><button class="toggle" data-key="flac" aria-pressed="false"></button></div>
   </section>
   <footer>
@@ -67,6 +72,6 @@
   </div>
 </section>
 <div id="dark" hidden></div>
-<script src="/static/app.js?v=13"></script>
+<script src="/static/app.js?v=14"></script>
 </body>
 </html>

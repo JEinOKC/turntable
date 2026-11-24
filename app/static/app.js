@@ -400,3 +400,33 @@ if (!kiosk) {
   }
   api("/api/settings").then(renderSettings).catch(() => {});
 }
+
+// ---------- Last.fm ----------
+
+function renderLastfm(st) {
+  $("lastfm").hidden = !st.configured;
+  $("lastfm-user").textContent = st.user ? `as ${st.user}` : "Not connected";
+  $("lastfm-connect").hidden = !!st.user;
+  $("lastfm").querySelector(".toggle").hidden = !st.user;
+}
+
+if (!kiosk) {
+  $("lastfm-connect").onclick = async () => {
+    // Open the tab now (inside the tap) so the phone doesn't block it, then point it at Last.fm.
+    const tab = window.open("", "_blank");
+    try {
+      const { url } = await api("/api/lastfm/connect", {});
+      tab.location = url;
+    } catch (e) {
+      tab?.close();
+      return alert(e.message);
+    }
+    // Wait for you to allow access on Last.fm.
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const st = await api("/api/lastfm/finish", {}).catch(() => null);
+      if (st?.user) return renderLastfm(st);
+    }
+  };
+  api("/api/lastfm").then(renderLastfm).catch(() => {});
+}

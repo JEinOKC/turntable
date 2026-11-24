@@ -100,3 +100,5 @@ body.kiosk .kiosk-hide { display: none !important; }
 /* Identified but no cover: record on the left, text as usual. */
 #np-view.no-art .np-sleeve, #np-view.no-art .np-bg { display: none; }
 #np-view.no-art .np-record { left: 110px; top: 100px; }
+.setting small { display: block; color: var(--muted); font-size: 13px; }
+button.small { padding: 6px 12px; font-size: 14px; margin-left: auto; margin-right: 10px; }
