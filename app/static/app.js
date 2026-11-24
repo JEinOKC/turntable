@@ -127,14 +127,20 @@ function showUi() {
   hideTimer = setTimeout(() => $("viz-ui").classList.add("hide"), 3000);
 }
 
+// Size from the visualizer itself, not the window: on iPhones the two differ as Safari's toolbar
+// shows and hides, which left old drawings uncleared along the bottom.
+let viewW = 0, viewH = 0;
+
 function resize() {
-  const portrait = innerHeight > innerWidth;
+  viewW = $("viz").clientWidth;
+  viewH = $("viz").clientHeight;
+  const portrait = viewH > viewW;
   $("np-view").classList.toggle("portrait", portrait);
-  $("np-view").style.setProperty("--np-scale", portrait ? Math.min(innerWidth / 480, innerHeight / 800)
-    : Math.min(innerWidth / 800, innerHeight / 480));
+  $("np-view").style.setProperty("--np-scale", portrait ? Math.min(viewW / 480, viewH / 800)
+    : Math.min(viewW / 800, viewH / 480));
   const dpr = devicePixelRatio || 1;
-  canvas.width = innerWidth * dpr;
-  canvas.height = innerHeight * dpr;
+  canvas.width = viewW * dpr;
+  canvas.height = viewH * dpr;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 }
 
@@ -142,7 +148,8 @@ function draw() {
   $("np-view").hidden = styles[style] !== nowPlaying;
   for (let i = 0; i < bands.length; i++) bands[i] *= 0.97;
   level *= 0.97;
-  styles[style](innerWidth, innerHeight);
+  if ($("viz").clientWidth !== viewW || $("viz").clientHeight !== viewH) resize();
+  styles[style](viewW, viewH);
   raf = requestAnimationFrame(draw);
 }
 
@@ -323,7 +330,7 @@ function fireplace(w, h) {
 function setStyle(n) {
   style = n % styles.length;
   localStorage.vizStyle = style;
-  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  ctx.clearRect(0, 0, viewW, viewH);
 }
 
 $("visualize").onclick = () => { openViz(); tellScreen("viz"); };
