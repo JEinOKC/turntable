@@ -270,67 +270,63 @@ function showNowPlaying(track, message) {
   view.querySelector(".np-album").textContent = album;
 }
 
-// A log fire whose flames flare with the music (classic "Doom fire" on a small grid, scaled up).
-const FIRE_W = 96, FIRE_H = 72;
-const fireHeat = new Uint8Array(FIRE_W * FIRE_H);
+// Soft rolling flames, after github.com/peinador/fireplace: layered noise drifting upward,
+// faded with height and coloured through a fire palette. Louder music makes taller, brighter flames.
+const FIRE_W = 64, FIRE_H = 40;
 const fireCanvas = Object.assign(document.createElement("canvas"), { width: FIRE_W, height: FIRE_H });
 const fireCtx = fireCanvas.getContext("2d");
 const fireImage = fireCtx.createImageData(FIRE_W, FIRE_H);
-const firePalette = Array.from({ length: 37 }, (_, i) => {
-  const t = i / 36;
-  return [Math.min(255, t * 3 * 255), Math.min(255, Math.max(0, t * 3 - 1) * 255), Math.max(0, t * 3 - 2) * 255];
+const FIRE_STOPS = [[0, 0, 0, 0], [0.25, 60, 4, 0], [0.45, 160, 20, 0], [0.65, 232, 90, 0],
+  [0.82, 255, 160, 20], [1, 255, 236, 170]];
+const firePalette = Array.from({ length: 256 }, (_, i) => {
+  const t = i / 255;
+  const k = FIRE_STOPS.findIndex(([at]) => at >= t);
+  const [a0, ...c0] = FIRE_STOPS[Math.max(0, k - 1)], [a1, ...c1] = FIRE_STOPS[k];
+  const f = a1 === a0 ? 0 : (t - a0) / (a1 - a0);
+  return c0.map((v, j) => Math.round(v + (c1[j] - v) * f));
 });
 
+// 2D gradient noise on a repeating grid (Perlin's smoothstep interpolation).
+const NOISE = 64;
+const noiseAngles = Float32Array.from({ length: NOISE * NOISE }, () => Math.random() * Math.PI * 2);
+function noise2(x, y) {
+  const x0 = Math.floor(x), y0 = Math.floor(y), fx = x - x0, fy = y - y0;
+  const dot = (ix, iy, dx, dy) => {
+    const a = noiseAngles[((iy % NOISE + NOISE) % NOISE) * NOISE + ((ix % NOISE + NOISE) % NOISE)];
+    return Math.cos(a) * dx + Math.sin(a) * dy;
+  };
+  const sx = fx * fx * fx * (fx * (fx * 6 - 15) + 10), sy = fy * fy * fy * (fy * (fy * 6 - 15) + 10);
+  const n0 = dot(x0, y0, fx, fy) + sx * (dot(x0 + 1, y0, fx - 1, fy) - dot(x0, y0, fx, fy));
+  const n1 = dot(x0, y0 + 1, fx, fy - 1) + sx * (dot(x0 + 1, y0 + 1, fx - 1, fy - 1) - dot(x0, y0 + 1, fx, fy - 1));
+  return n0 + sy * (n1 - n0);
+}
+
+let fireHeight = 0.6;
 function fireplace(w, h) {
-  // Feed the bottom row: a steady base fire plus heat from the music, bass in the middle.
-  // Slow-moving waves across the row split the fire into separate tongues.
   const t = performance.now() / 1000;
-  for (let x = 0; x < FIRE_W; x++) {
-    const edge = Math.abs(x / FIRE_W - 0.5) * 2;
-    const band = bands[Math.floor(edge * (bands.length * 0.6))];
-    const tongue = 0.5 + 0.5 * Math.sin(x * 0.35 + t * 2.3) * Math.sin(x * 0.13 - t * 1.1);
-    const heat = edge > 0.7 ? 0 : (14 + tongue * 14 + band * 10) * (1 - edge * 0.6);
-    fireHeat[(FIRE_H - 1) * FIRE_W + x] = Math.min(36, heat);
-  }
-  // Let heat rise, cool and flicker; louder music cools slower so flames reach higher.
-  const cooling = 1.6 - level * 0.25;
-  for (let y = 1; y < FIRE_H; y++) {
+  const bass = (bands[0] + bands[1] + bands[2] + bands[3]) / 4;
+  fireHeight += (0.55 + level * 0.35 + bass * 0.15 - fireHeight) * 0.08;  // ease toward the music
+  const px = fireImage.data;
+  for (let y = 0; y < FIRE_H; y++) {
+    const up = 1 - y / (FIRE_H - 1);  // 0 at the bottom, 1 at the top
+    const fade = Math.max(0, 1 - (up / fireHeight) ** 2);  // quadratic fall-off with height
     for (let x = 0; x < FIRE_W; x++) {
-      const drift = (Math.random() * 3) | 0;
-      const dst = (y - 1) * FIRE_W + Math.min(FIRE_W - 1, Math.max(0, x - drift + 1));
-      fireHeat[dst] = Math.max(0, fireHeat[y * FIRE_W + x] - ((Math.random() * cooling) | 0));
+      const edge = Math.abs(x / (FIRE_W - 1) - 0.5) * 2;
+      const nx = x / 7, ny = y / 14 + t * 1.6;  // stretched tall, drifting upward
+      const n = noise2(nx, ny) + 0.5 * noise2(nx * 2, ny * 2) + 0.25 * noise2(nx * 4 + t, ny * 4);
+      const bed = (1 - up) ** 3 * 0.35;  // a hot glowing bed along the bottom
+      const v = Math.min(1, Math.max(0, ((n * 0.9 + 0.55) * fade + bed) * (1 - edge ** 3) * 1.25));
+      const [r, g, b] = firePalette[(v * 255) | 0];
+      const i = (y * FIRE_W + x) * 4;
+      px[i] = r; px[i + 1] = g; px[i + 2] = b; px[i + 3] = 255;
     }
   }
-  const px = fireImage.data;
-  for (let i = 0; i < fireHeat.length; i++) {
-    const [r, g, b] = firePalette[fireHeat[i] | 0];
-    px[i * 4] = r; px[i * 4 + 1] = g; px[i * 4 + 2] = b; px[i * 4 + 3] = 255;
-  }
   fireCtx.putImageData(fireImage, 0, 0);
-
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, w, h);
   ctx.imageSmoothingEnabled = true;
   ctx.imageSmoothingQuality = "high";
-  const fh = h * 0.9;
-  ctx.drawImage(fireCanvas, 0, h - fh - h * 0.06, w, fh);
-
-  // Logs and glowing embers in front of the flames.
-  const logH = h * 0.09, base = h - logH * 0.6;
-  ctx.fillStyle = `rgba(255, ${90 + level * 80}, 20, ${0.35 + level * 0.4})`;
-  ctx.beginPath(); ctx.ellipse(w / 2, base + logH * 0.2, w * 0.32, logH * 0.5, 0, 0, Math.PI * 2); ctx.fill();
-  for (const [cx, tilt] of [[0.42, 0.05], [0.58, -0.05]]) {
-    ctx.save();
-    ctx.translate(w * cx, base);
-    ctx.rotate(tilt);
-    const grad = ctx.createLinearGradient(0, -logH / 2, 0, logH / 2);
-    grad.addColorStop(0, "#5a3a22"); grad.addColorStop(1, "#24160c");
-    ctx.fillStyle = grad;
-    ctx.beginPath(); ctx.roundRect(-w * 0.22, -logH / 2, w * 0.44, logH, logH / 2); ctx.fill();
-    ctx.fillStyle = "#8a6a4a";
-    ctx.beginPath(); ctx.ellipse(w * (tilt > 0 ? -0.22 : 0.22), 0, logH * 0.3, logH / 2, 0, 0, Math.PI * 2); ctx.fill();
-    ctx.restore();
-  }
+  ctx.drawImage(fireCanvas, 0, 0, w, h);
 }
 
 function setStyle(n) {
