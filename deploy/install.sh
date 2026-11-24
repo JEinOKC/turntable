@@ -28,5 +28,8 @@ if ! cat ~/turntable/audio.py turntable-audio.service | cmp -s - "$STAMP"; then
   sleep 30
 fi
 sudo systemctl restart turntable
+# Invisible mouse pointer on the touchscreen (touches otherwise leave an arrow on screen).
+python3 blank-cursor.py >/dev/null
+grep -q "^XCURSOR_THEME=blank" ~/.config/labwc/environment 2>/dev/null || echo "XCURSOR_THEME=blank" >> ~/.config/labwc/environment
 mkdir -p ~/.config/autostart
 install -m 644 kiosk.desktop ~/.config/autostart/turntable-kiosk.desktop
