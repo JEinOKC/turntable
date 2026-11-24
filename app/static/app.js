@@ -427,6 +427,14 @@ function markScreen(st) {
 }
 
 if (kiosk) {
+  // A touch brightens the dimmed screen.
+  let lastTouch = 0;
+  document.addEventListener("pointerdown", () => {
+    if (Date.now() - lastTouch > 5000) {
+      lastTouch = Date.now();
+      api("/api/screen/touch", {}).catch(() => {});
+    }
+  }, true);
   $("dark").onclick = () => { $("dark").hidden = true; tellScreen("controls"); };
   followScreen();
   setInterval(followScreen, 1000);

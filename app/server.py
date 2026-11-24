@@ -34,6 +34,8 @@ FLAC_PATH = "/turntable.flac"
 STATIC = Path(__file__).parent / "static"
 SETTINGS_FILE = Path.home() / ".config" / "turntable" / "settings.json"
 BACKLIGHT = Path("/sys/class/backlight/10-0045/brightness")
+BRIGHT, DIM = 255, 30  # the Pi screen dims when nothing's playing
+DIM_AFTER = 30  # seconds without music (or a touch) before dimming
 
 RATE = 44100
 VIS_RATE = RATE // 4
@@ -415,7 +417,7 @@ def set_screen(mode=None, style=None):
         except OSError:
             pass
     try:
-        BACKLIGHT.write_text("0" if screen["mode"] == "off" else "255")
+        BACKLIGHT.write_text("0" if screen["mode"] == "off" else str(BRIGHT))
     except OSError as e:
         print(f"backlight: {e}", flush=True)
 
@@ -608,6 +610,15 @@ async def follow_music():
                 and now - quiet_since >= idle and time.monotonic() - lastfm.chosen_at >= idle):
             await lastfm.end_session()
 
+        # Dim while nothing's playing; full brightness for music or right after the screen is used.
+        if screen["mode"] != "off":
+            want = BRIGHT if (now - quiet_since < DIM_AFTER or now - screen_changed < DIM_AFTER) else DIM
+            try:
+                if BACKLIGHT.read_text().strip() != str(want):
+                    BACKLIGHT.write_text(str(want))
+            except OSError:
+                pass
+
         if (settings["screen_sleep"] and screen["mode"] != "off"
                 and now - quiet_since >= idle and now - screen_changed >= idle):
             slept_from = screen["mode"]
@@ -716,6 +727,14 @@ async def get_screen(request):
     if "kiosk" in request.query:
         kiosk_seen = time.monotonic()
     return web.json_response(screen)
+
+
+@routes.post("/api/screen/touch")
+async def screen_touch(request):
+    """The Pi screen was touched: brighten it for a while."""
+    global screen_changed
+    screen_changed = time.monotonic()
+    return web.json_response({"ok": True})
 
 
 @routes.get("/api/kiosk-alive")
