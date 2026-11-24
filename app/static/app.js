@@ -60,7 +60,8 @@ async function refreshStatus() {
     pill.textContent = !s.capturing ? "Turntable unplugged" : s.signal ? "Live" : "Silent";
     pill.classList.toggle("live", s.capturing && s.signal);
     const message = { searching: ["Listening…", "Identifying the song"],
-      unknown: ["Couldn't identify this song", "Shazam didn't recognise it"] }[s.identify];
+      unknown: ["Couldn't identify this song", "Shazam didn't recognise it"],
+      offline: ["No song info", "Can't reach Shazam: the internet seems to be down"] }[s.identify];
     $("now").hidden = !s.track && !message;
     $("now").classList.toggle("status", !s.track && !!message);
     if (!s.track && message) [$("np-title").textContent, $("np-artist").textContent] = message;

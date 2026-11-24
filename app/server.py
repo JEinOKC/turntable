@@ -422,10 +422,11 @@ async def identify():
     global track, shazam
     shazam = shazam or Shazam()
     try:
-        result = await shazam.recognize(audio.clip_wav())
+        result = await asyncio.wait_for(shazam.recognize(audio.clip_wav()), 20)
     except Exception as e:
-        print(f"shazam: {e}", flush=True)
-        return False
+        # Most likely no internet. The music doesn't depend on any of this.
+        print(f"shazam: {e.__class__.__name__} {e}", flush=True)
+        return "offline"
     found = result.get("track")
     if not found:
         return None
@@ -532,6 +533,10 @@ async def follow_tracks():
         before = started_estimate
         started_estimate = guess
         result = await identify()
+        if result == "offline":
+            started_estimate = before
+            due, last_try, id_state = None, time.monotonic(), "offline"
+            continue
         if result:
             if result == "same":
                 started_estimate = before

@@ -55,7 +55,7 @@ async def call(method, http_method="POST", **params):
     params["api_sig"] = hashlib.md5(
         ("".join(k + params[k] for k in sorted(params)) + API_SECRET).encode()).hexdigest()
     params["format"] = "json"
-    async with aiohttp.ClientSession() as http:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as http:
         req = http.post(API, data=params) if http_method == "POST" else http.get(API, params=params)
         async with req as resp:
             data = await resp.json(content_type=None)
